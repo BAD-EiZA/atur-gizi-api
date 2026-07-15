@@ -122,6 +122,9 @@ export class GeminiClient {
     if (!this.isConfigured()) {
       return this.mockResult();
     }
+    if (!input.imageBase64 && !input.imageUrl) {
+      throw new Error('no_image');
+    }
 
     const ai = new GoogleGenAI({ apiKey: this.config.get<string>('gemini.apiKey')! });
     const parts: Array<
@@ -144,23 +147,32 @@ export class GeminiClient {
           mimeType: input.mimeType ?? 'image/jpeg',
         },
       });
-    } else {
-      throw new Error('no_image');
     }
 
-    const response = await ai.models.generateContent({
-      model: this.model,
-      contents: [{ role: 'user', parts }],
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: FOOD_SCHEMA as unknown as Record<string, unknown>,
-        temperature: 0.2,
-      },
-    });
-
-    const text = response.text;
-    if (!text) throw new Error('empty_response');
-    return JSON.parse(text) as GeminiFoodResult;
+    const maxRetries = this.config.get<number>('gemini.maxRetries') ?? 2;
+    let lastErr: unknown;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await ai.models.generateContent({
+          model: this.model,
+          contents: [{ role: 'user', parts }],
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: FOOD_SCHEMA as unknown as Record<string, unknown>,
+            temperature: 0.2,
+          },
+        });
+        const text = response.text;
+        if (!text) throw new Error('empty_response');
+        return JSON.parse(text) as GeminiFoodResult;
+      } catch (e) {
+        lastErr = e;
+        if (attempt < maxRetries) {
+          await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+        }
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error('gemini_failed');
   }
 
   mockResult(): GeminiFoodResult {

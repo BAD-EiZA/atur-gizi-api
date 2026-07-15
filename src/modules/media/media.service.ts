@@ -108,4 +108,20 @@ export class MediaService {
       transformation: [{ width: 1280, crop: 'limit', quality: 'auto', fetch_format: 'auto' }],
     });
   }
+
+  /** Download asset for Gemini (authenticated delivery cannot be fetched by provider). */
+  async fetchAsBase64(publicId: string): Promise<{ data: string; mimeType: string } | null> {
+    if (!this.isConfigured()) return null;
+    try {
+      const url = this.signedDeliveryUrl(publicId);
+      if (!url) return null;
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      const buf = Buffer.from(await res.arrayBuffer());
+      const mimeType = res.headers.get('content-type') || 'image/jpeg';
+      return { data: buf.toString('base64'), mimeType };
+    } catch {
+      return null;
+    }
+  }
 }
