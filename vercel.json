@@ -1,3 +1,24 @@
 {
-  "regions": ["sin1"]
+  "version": 2,
+  "regions": ["sin1"],
+  "builds": [
+    {
+      "src": "api/index.ts",
+      "use": "@vercel/node",
+      "config": {
+        "maxDuration": 60,
+        "includeFiles": [
+          "node_modules/.prisma/**",
+          "node_modules/@prisma/client/**",
+          "prisma/**"
+        ]
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "api/index.ts"
+    }
+  ]
 }
