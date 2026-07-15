@@ -31,8 +31,17 @@ export class AuthGuard implements CanActivate {
 
     let claims: AuthClaims;
 
-    // Prefer real JWT when provided; allow full bypass only without Authorization
-    if (header?.startsWith('Bearer ') && issuer) {
+    // Production: JWT required. Dev bypass only when AUTH_DEV_BYPASS=true AND no Bearer.
+    if (header?.startsWith('Bearer ')) {
+      if (!issuer) {
+        throw new UnauthorizedException({
+          error: {
+            code: 'AUTH_MISCONFIGURED',
+            message: 'Issuer Kinde belum dikonfigurasi.',
+            details: [],
+          },
+        });
+      }
       const token = header.slice(7);
       try {
         if (!this.jwks) {
@@ -41,10 +50,9 @@ export class AuthGuard implements CanActivate {
             `${issuer.replace(/\/$/, '')}/.well-known/jwks.json`;
           this.jwks = createRemoteJWKSet(new URL(jwksUrl));
         }
-        const { payload } = await jwtVerify(token, this.jwks, {
-          issuer,
-          audience: audience || undefined,
-        });
+        const verifyOpts: { issuer: string; audience?: string } = { issuer };
+        if (audience) verifyOpts.audience = audience;
+        const { payload } = await jwtVerify(token, this.jwks, verifyOpts);
         if (!payload.sub) {
           throw new Error('missing sub');
         }
