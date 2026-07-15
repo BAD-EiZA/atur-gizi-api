@@ -27,26 +27,12 @@ export class AuthGuard implements CanActivate {
     const devBypass = this.config.get<boolean>('auth.devBypass');
     const issuer = this.config.get<string>('auth.issuerUrl') ?? '';
     const audience = this.config.get<string>('auth.audience') ?? '';
+    const header = req.headers.authorization;
 
     let claims: AuthClaims;
 
-    if (devBypass && !issuer) {
-      claims = {
-        sub: this.config.get<string>('auth.devUserId') ?? 'dev-user-1',
-        email: this.config.get<string>('auth.devEmail'),
-        name: this.config.get<string>('auth.devName'),
-      };
-    } else {
-      const header = req.headers.authorization;
-      if (!header?.startsWith('Bearer ')) {
-        throw new UnauthorizedException({
-          error: {
-            code: 'UNAUTHORIZED',
-            message: 'Token tidak valid atau tidak ada.',
-            details: [],
-          },
-        });
-      }
+    // Prefer real JWT when provided; allow full bypass only without Authorization
+    if (header?.startsWith('Bearer ') && issuer) {
       const token = header.slice(7);
       try {
         if (!this.jwks) {
@@ -80,6 +66,20 @@ export class AuthGuard implements CanActivate {
           },
         });
       }
+    } else if (devBypass) {
+      claims = {
+        sub: this.config.get<string>('auth.devUserId') ?? 'dev-user-1',
+        email: this.config.get<string>('auth.devEmail'),
+        name: this.config.get<string>('auth.devName'),
+      };
+    } else {
+      throw new UnauthorizedException({
+        error: {
+          code: 'UNAUTHORIZED',
+          message: 'Token tidak valid atau tidak ada.',
+          details: [],
+        },
+      });
     }
 
     const appUser = await this.prisma.appUser.findUnique({
