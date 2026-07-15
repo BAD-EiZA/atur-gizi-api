@@ -1,0 +1,306 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum UserStatus {
+  active
+  deletion_requested
+  deleted
+}
+
+enum UnitSystem {
+  metric
+  imperial
+}
+
+enum MetabolicFormula {
+  mifflin_a
+  mifflin_b
+  manual
+}
+
+enum ActivityLevel {
+  sedentary
+  light
+  moderate
+  high
+  very_high
+}
+
+enum FitnessGoal {
+  lose_weight
+  maintain
+  gain_weight
+  manual
+}
+
+enum MealType {
+  breakfast
+  lunch
+  dinner
+  snack
+  other
+}
+
+enum FoodLogSource {
+  manual
+  ai_confirmed
+  import
+}
+
+enum AiAnalysisStatus {
+  uploaded
+  processing
+  succeeded
+  needs_review
+  confirmed
+  failed
+  cancelled
+}
+
+enum Intensity {
+  low
+  moderate
+  high
+}
+
+model AppUser {
+  id           String     @id @default(uuid()) @db.Uuid
+  kindeUserId  String     @unique @map("kinde_user_id")
+  email        String?
+  displayName  String?    @map("display_name")
+  status       UserStatus @default(active)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt    DateTime?  @map("deleted_at") @db.Timestamptz
+
+  profile         UserProfile?
+  settings        UserSettings?
+  dailyTargets    DailyTarget[]
+  foodLogs        FoodLog[]
+  activityLogs    ActivityLog[]
+  aiAnalysisRuns  AiAnalysisRun[]
+  auditEvents     AuditEvent[]
+  idempotencyKeys IdempotencyKey[]
+  aiUsageDaily    AiUsageDaily[]
+
+  @@map("app_users")
+}
+
+model UserProfile {
+  id                  String           @id @default(uuid()) @db.Uuid
+  userId              String           @unique @map("user_id") @db.Uuid
+  dateOfBirth         DateTime?        @map("date_of_birth") @db.Date
+  heightCm            Decimal?         @map("height_cm") @db.Decimal(6, 2)
+  currentWeightKg     Decimal?         @map("current_weight_kg") @db.Decimal(6, 2)
+  metabolicFormula    MetabolicFormula @default(manual) @map("metabolic_formula")
+  activityLevel       ActivityLevel?   @map("activity_level")
+  fitnessGoal         FitnessGoal?     @map("fitness_goal")
+  targetRate          Decimal?         @map("target_rate") @db.Decimal(5, 2)
+  formulaVersion      String?          @map("formula_version")
+  onboardingCompleted Boolean          @default(false) @map("onboarding_completed")
+  estimatesAccepted   Boolean          @default(false) @map("estimates_accepted")
+  updatedAt           DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_profiles")
+}
+
+model UserSettings {
+  id               String     @id @default(uuid()) @db.Uuid
+  userId           String     @unique @map("user_id") @db.Uuid
+  timezone         String     @default("Asia/Jakarta")
+  unitSystem       UnitSystem @default(metric) @map("unit_system")
+  locale           String     @default("id-ID")
+  retainFoodPhotos Boolean    @default(false) @map("retain_food_photos")
+  analyticsConsent Boolean    @default(false) @map("analytics_consent")
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_settings")
+}
+
+model DailyTarget {
+  id                 String       @id @default(uuid()) @db.Uuid
+  userId             String       @map("user_id") @db.Uuid
+  effectiveFrom      DateTime     @map("effective_from") @db.Date
+  effectiveTo        DateTime?    @map("effective_to") @db.Date
+  bmrKcal            Int?         @map("bmr_kcal")
+  tdeeKcal           Int?         @map("tdee_kcal")
+  calorieTarget      Int          @map("calorie_target")
+  goal               FitnessGoal
+  calculationMethod  String       @map("calculation_method")
+  calculationInputs  Json         @map("calculation_inputs")
+  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, effectiveFrom(sort: Desc)])
+  @@map("daily_targets")
+}
+
+model FoodLog {
+  id                 String        @id @default(uuid()) @db.Uuid
+  userId             String        @map("user_id") @db.Uuid
+  logDate            DateTime      @map("log_date") @db.Date
+  consumedAt         DateTime      @map("consumed_at") @db.Timestamptz
+  mealType           MealType      @map("meal_type")
+  title              String
+  totalCalories      Int           @map("total_calories")
+  proteinG           Decimal?      @map("protein_g") @db.Decimal(8, 2)
+  carbsG             Decimal?      @map("carbs_g") @db.Decimal(8, 2)
+  fatG               Decimal?      @map("fat_g") @db.Decimal(8, 2)
+  source             FoodLogSource @default(manual)
+  cloudinaryPublicId String?       @map("cloudinary_public_id")
+  mediaDeliveryType  String?       @map("media_delivery_type")
+  aiAnalysisId       String?       @unique @map("ai_analysis_id") @db.Uuid
+  notes              String?
+  createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt          DateTime?     @map("deleted_at") @db.Timestamptz
+
+  user       AppUser        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items      FoodItem[]
+  aiAnalysis AiAnalysisRun? @relation(fields: [aiAnalysisId], references: [id])
+
+  @@index([userId, logDate(sort: Desc), consumedAt(sort: Desc)])
+  @@index([userId, logDate, deletedAt])
+  @@map("food_logs")
+}
+
+model FoodItem {
+  id            String   @id @default(uuid()) @db.Uuid
+  foodLogId     String   @map("food_log_id") @db.Uuid
+  name          String
+  portionAmount Decimal  @map("portion_amount") @db.Decimal(10, 2)
+  portionUnit   String   @map("portion_unit")
+  calories      Int
+  proteinG      Decimal? @map("protein_g") @db.Decimal(8, 2)
+  carbsG        Decimal? @map("carbs_g") @db.Decimal(8, 2)
+  fatG          Decimal? @map("fat_g") @db.Decimal(8, 2)
+  fiberG        Decimal? @map("fiber_g") @db.Decimal(8, 2)
+  aiConfidence  Decimal? @map("ai_confidence") @db.Decimal(4, 3)
+  sortOrder     Int      @default(0) @map("sort_order")
+
+  foodLog FoodLog @relation(fields: [foodLogId], references: [id], onDelete: Cascade)
+
+  @@map("food_items")
+}
+
+model ActivityType {
+  id         String   @id @default(uuid()) @db.Uuid
+  slug       String   @unique
+  name       String
+  category   String
+  defaultMet Decimal  @map("default_met") @db.Decimal(5, 2)
+  active     Boolean  @default(true)
+  sourceVersion String @default("met_compendium_v1") @map("source_version")
+
+  logs ActivityLog[]
+
+  @@map("activity_types")
+}
+
+model ActivityLog {
+  id                 String     @id @default(uuid()) @db.Uuid
+  userId             String     @map("user_id") @db.Uuid
+  activityTypeId     String?    @map("activity_type_id") @db.Uuid
+  customName         String?    @map("custom_name")
+  logDate            DateTime   @map("log_date") @db.Date
+  startedAt          DateTime?  @map("started_at") @db.Timestamptz
+  durationMinutes    Int        @map("duration_minutes")
+  intensity          Intensity  @default(moderate)
+  metValue           Decimal    @map("met_value") @db.Decimal(5, 2)
+  weightSnapshotKg   Decimal    @map("weight_snapshot_kg") @db.Decimal(6, 2)
+  calculatedCalories Int        @map("calculated_calories")
+  caloriesBurned     Int        @map("calories_burned")
+  formulaVersion     String     @map("formula_version")
+  notes              String?
+  createdAt          DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt          DateTime?  @map("deleted_at") @db.Timestamptz
+
+  user         AppUser       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activityType ActivityType? @relation(fields: [activityTypeId], references: [id])
+
+  @@index([userId, logDate(sort: Desc)])
+  @@index([userId, logDate, deletedAt])
+  @@map("activity_logs")
+}
+
+model AiAnalysisRun {
+  id                  String           @id @default(uuid()) @db.Uuid
+  userId              String           @map("user_id") @db.Uuid
+  provider            String           @default("google")
+  model               String
+  promptVersion       String           @map("prompt_version")
+  schemaVersion       String           @map("schema_version")
+  cloudinaryPublicId  String           @map("cloudinary_public_id")
+  mediaDeliveryType   String?          @map("media_delivery_type")
+  mediaVersion        String?          @map("media_version")
+  mediaFormat         String?          @map("media_format")
+  mediaBytes          Int?             @map("media_bytes")
+  status              AiAnalysisStatus @default(uploaded)
+  latencyMs           Int?             @map("latency_ms")
+  overallConfidence   Decimal?         @map("overall_confidence") @db.Decimal(4, 3)
+  normalizedOutput    Json?            @map("normalized_output")
+  failureCode         String?          @map("failure_code")
+  createdAt           DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  confirmedAt         DateTime?        @map("confirmed_at") @db.Timestamptz
+
+  user    AppUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  foodLog FoodLog?
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("ai_analysis_runs")
+}
+
+model AiUsageDaily {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  usageDate DateTime @map("usage_date") @db.Date
+  count     Int      @default(0)
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, usageDate])
+  @@map("ai_usage_daily")
+}
+
+model AuditEvent {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String?  @map("user_id") @db.Uuid
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String?  @map("entity_id") @db.Uuid
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user AppUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("audit_events")
+}
+
+model IdempotencyKey {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  key          String
+  route        String
+  requestHash  String   @map("request_hash")
+  statusCode   Int      @map("status_code")
+  responseBody Json     @map("response_body")
+  expiresAt    DateTime @map("expires_at") @db.Timestamptz
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key, route])
+  @@map("idempotency_keys")
+}
