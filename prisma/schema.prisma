@@ -101,8 +101,32 @@ model AppUser {
   subscriptions   Subscription[]
   rateLimitBuckets RateLimitBucket[]
   analyticsEvents AnalyticsEvent[]
+  mealMemories    MealMemory[]
 
   @@map("app_users")
+}
+
+model MealMemory {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  alias       String
+  resolvedName String  @map("resolved_name")
+  portionAmount Decimal? @map("portion_amount") @db.Decimal(10, 2)
+  portionUnit String?  @map("portion_unit")
+  calories    Int?
+  proteinG    Decimal? @map("protein_g") @db.Decimal(8, 2)
+  carbsG      Decimal? @map("carbs_g") @db.Decimal(8, 2)
+  fatG        Decimal? @map("fat_g") @db.Decimal(8, 2)
+  notes       String?
+  useCount    Int      @default(1) @map("use_count")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, alias])
+  @@index([userId, updatedAt(sort: Desc)])
+  @@map("meal_memories")
 }
 
 model UserProfile {
