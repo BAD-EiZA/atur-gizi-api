@@ -1,10 +1,17 @@
 import { AuthenticatedUser } from '../../common/auth/auth.types';
 import { AiService } from './ai.service';
 import { ConfirmAnalysisDto, StartAnalysisDto } from './dto/ai.dto';
+import { RateLimitService } from '../../common/rate-limit/rate-limit.service';
+import { IdempotencyService } from '../../common/idempotency/idempotency.service';
+import { AnalyticsService } from '../../common/analytics/analytics.service';
+import type { Request } from 'express';
 export declare class AiController {
     private readonly ai;
-    constructor(ai: AiService);
-    start(user: AuthenticatedUser, dto: StartAnalysisDto): Promise<{
+    private readonly rateLimit;
+    private readonly idempotency;
+    private readonly analytics;
+    constructor(ai: AiService, rateLimit: RateLimitService, idempotency: IdempotencyService, analytics: AnalyticsService);
+    start(user: AuthenticatedUser, dto: StartAnalysisDto, req: Request): Promise<{
         id: string;
         status: string;
         model: string;
@@ -64,7 +71,7 @@ export declare class AiController {
         } | undefined;
         disclaimer: string;
     }>;
-    confirm(user: AuthenticatedUser, id: string, dto: ConfirmAnalysisDto): Promise<{
+    confirm(user: AuthenticatedUser, id: string, dto: ConfirmAnalysisDto, idemKey?: string): Promise<import("@prisma/client/runtime/library").JsonValue | {
         analysis_id: string;
         food_log: {
             id: string;

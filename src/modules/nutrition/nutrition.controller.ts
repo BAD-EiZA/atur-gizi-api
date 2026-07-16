@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   Param,
   Patch,
   Post,
@@ -15,15 +16,33 @@ import { AuthenticatedUser } from '../../common/auth/auth.types';
 import { NutritionService } from './nutrition.service';
 import { CreateFoodLogDto, UpdateFoodLogDto } from './dto/food-log.dto';
 import { MealType } from '@prisma/client';
+import { IdempotencyService } from '../../common/idempotency/idempotency.service';
+import { AnalyticsService } from '../../common/analytics/analytics.service';
 
 @Controller('v1/food-logs')
 @UseGuards(AuthGuard)
 export class NutritionController {
-  constructor(private readonly nutrition: NutritionService) {}
+  constructor(
+    private readonly nutrition: NutritionService,
+    private readonly idempotency: IdempotencyService,
+    private readonly analytics: AnalyticsService,
+  ) {}
 
   @Post()
-  create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateFoodLogDto) {
-    return this.nutrition.create(user.appUserId, dto);
+  async create(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreateFoodLogDto,
+    @Headers('idempotency-key') idemKey?: string,
+  ) {
+    const route = 'POST /v1/food-logs';
+    const started = await this.idempotency.begin(user.appUserId, idemKey, route, dto);
+    if (started?.replay) return started.body;
+    const result = await this.nutrition.create(user.appUserId, dto);
+    if (idemKey && started && !started.replay) {
+      await this.idempotency.save(user.appUserId, idemKey, route, started.requestHash, 201, result);
+    }
+    await this.analytics.track(user.appUserId, 'food_log_created_manual');
+    return result;
   }
 
   @Get()

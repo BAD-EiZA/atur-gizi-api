@@ -27,21 +27,14 @@ let AuthGuard = class AuthGuard {
         const devBypass = this.config.get('auth.devBypass');
         const issuer = this.config.get('auth.issuerUrl') ?? '';
         const audience = this.config.get('auth.audience') ?? '';
+        const header = req.headers.authorization;
         let claims;
-        if (devBypass && !issuer) {
-            claims = {
-                sub: this.config.get('auth.devUserId') ?? 'dev-user-1',
-                email: this.config.get('auth.devEmail'),
-                name: this.config.get('auth.devName'),
-            };
-        }
-        else {
-            const header = req.headers.authorization;
-            if (!header?.startsWith('Bearer ')) {
+        if (header?.startsWith('Bearer ')) {
+            if (!issuer) {
                 throw new common_1.UnauthorizedException({
                     error: {
-                        code: 'UNAUTHORIZED',
-                        message: 'Token tidak valid atau tidak ada.',
+                        code: 'AUTH_MISCONFIGURED',
+                        message: 'Issuer Kinde belum dikonfigurasi.',
                         details: [],
                     },
                 });
@@ -53,10 +46,10 @@ let AuthGuard = class AuthGuard {
                         `${issuer.replace(/\/$/, '')}/.well-known/jwks.json`;
                     this.jwks = (0, jose_1.createRemoteJWKSet)(new URL(jwksUrl));
                 }
-                const { payload } = await (0, jose_1.jwtVerify)(token, this.jwks, {
-                    issuer,
-                    audience: audience || undefined,
-                });
+                const verifyOpts = { issuer };
+                if (audience)
+                    verifyOpts.audience = audience;
+                const { payload } = await (0, jose_1.jwtVerify)(token, this.jwks, verifyOpts);
                 if (!payload.sub) {
                     throw new Error('missing sub');
                 }
@@ -77,6 +70,22 @@ let AuthGuard = class AuthGuard {
                     },
                 });
             }
+        }
+        else if (devBypass) {
+            claims = {
+                sub: this.config.get('auth.devUserId') ?? 'dev-user-1',
+                email: this.config.get('auth.devEmail'),
+                name: this.config.get('auth.devName'),
+            };
+        }
+        else {
+            throw new common_1.UnauthorizedException({
+                error: {
+                    code: 'UNAUTHORIZED',
+                    message: 'Token tidak valid atau tidak ada.',
+                    details: [],
+                },
+            });
         }
         const appUser = await this.prisma.appUser.findUnique({
             where: { kindeUserId: claims.sub },

@@ -1,9 +1,13 @@
 import { AuthenticatedUser } from '../../common/auth/auth.types';
 import { ActivitiesService } from './activities.service';
 import { CreateActivityLogDto, EstimateActivityDto, UpdateActivityLogDto } from './dto/activity.dto';
+import { IdempotencyService } from '../../common/idempotency/idempotency.service';
+import { AnalyticsService } from '../../common/analytics/analytics.service';
 export declare class ActivitiesController {
     private readonly activities;
-    constructor(activities: ActivitiesService);
+    private readonly idempotency;
+    private readonly analytics;
+    constructor(activities: ActivitiesService, idempotency: IdempotencyService, analytics: AnalyticsService);
     types(): Promise<{
         data: {
             id: string;
@@ -20,7 +24,7 @@ export declare class ActivitiesController {
         calculated_calories: number;
         formula_version: string;
     }>;
-    create(user: AuthenticatedUser, dto: CreateActivityLogDto): Promise<{
+    create(user: AuthenticatedUser, dto: CreateActivityLogDto, idemKey?: string): Promise<import("@prisma/client/runtime/library").JsonValue | {
         id: string;
         log_date: string;
         started_at: string | null;

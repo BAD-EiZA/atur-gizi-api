@@ -2,10 +2,14 @@ import { AuthenticatedUser } from '../../common/auth/auth.types';
 import { NutritionService } from './nutrition.service';
 import { CreateFoodLogDto, UpdateFoodLogDto } from './dto/food-log.dto';
 import { MealType } from '@prisma/client';
+import { IdempotencyService } from '../../common/idempotency/idempotency.service';
+import { AnalyticsService } from '../../common/analytics/analytics.service';
 export declare class NutritionController {
     private readonly nutrition;
-    constructor(nutrition: NutritionService);
-    create(user: AuthenticatedUser, dto: CreateFoodLogDto): Promise<{
+    private readonly idempotency;
+    private readonly analytics;
+    constructor(nutrition: NutritionService, idempotency: IdempotencyService, analytics: AnalyticsService);
+    create(user: AuthenticatedUser, dto: CreateFoodLogDto, idemKey?: string): Promise<import("@prisma/client/runtime/library").JsonValue | {
         id: string;
         log_date: string;
         consumed_at: string;

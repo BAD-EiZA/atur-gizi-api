@@ -90,6 +90,17 @@ model AppUser {
   auditEvents     AuditEvent[]
   idempotencyKeys IdempotencyKey[]
   aiUsageDaily    AiUsageDaily[]
+  favoriteFoods   FavoriteFood[]
+  favoriteActivities FavoriteActivity[]
+  mealPlans       MealPlan[]
+  barcodeScans    BarcodeScan[]
+  wearableLinks   WearableLink[]
+  socialPosts     SocialPost[]
+  weeklyInsights  WeeklyInsight[]
+  exportJobs      ExportJob[]
+  subscriptions   Subscription[]
+  rateLimitBuckets RateLimitBucket[]
+  analyticsEvents AnalyticsEvent[]
 
   @@map("app_users")
 }
@@ -304,4 +315,185 @@ model IdempotencyKey {
 
   @@unique([userId, key, route])
   @@map("idempotency_keys")
+}
+
+model FavoriteFood {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  name          String
+  portionAmount Decimal  @map("portion_amount") @db.Decimal(10, 2)
+  portionUnit   String   @map("portion_unit")
+  calories      Int
+  proteinG      Decimal? @map("protein_g") @db.Decimal(8, 2)
+  carbsG        Decimal? @map("carbs_g") @db.Decimal(8, 2)
+  fatG          Decimal? @map("fat_g") @db.Decimal(8, 2)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("favorite_foods")
+}
+
+model FavoriteActivity {
+  id              String   @id @default(uuid()) @db.Uuid
+  userId          String   @map("user_id") @db.Uuid
+  activityTypeId  String?  @map("activity_type_id") @db.Uuid
+  customName      String?  @map("custom_name")
+  defaultMinutes  Int      @default(30) @map("default_minutes")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("favorite_activities")
+}
+
+model MealPlan {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  title       String
+  planDate    DateTime @map("plan_date") @db.Date
+  mealType    MealType @map("meal_type")
+  items       Json
+  totalCalories Int    @map("total_calories")
+  notes       String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, planDate])
+  @@map("meal_plans")
+}
+
+model BarcodeProduct {
+  id          String   @id @default(uuid()) @db.Uuid
+  barcode     String   @unique
+  name        String
+  brand       String?
+  servingSize String?  @map("serving_size")
+  calories    Int
+  proteinG    Decimal? @map("protein_g") @db.Decimal(8, 2)
+  carbsG      Decimal? @map("carbs_g") @db.Decimal(8, 2)
+  fatG        Decimal? @map("fat_g") @db.Decimal(8, 2)
+  source      String   @default("manual")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  scans BarcodeScan[]
+
+  @@map("barcode_products")
+}
+
+model BarcodeScan {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  productId String   @map("product_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user    AppUser        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product BarcodeProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("barcode_scans")
+}
+
+model WearableLink {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  provider     String
+  externalId   String?  @map("external_id")
+  status       String   @default("connected")
+  lastSyncAt   DateTime? @map("last_sync_at") @db.Timestamptz
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider])
+  @@map("wearable_links")
+}
+
+model SocialPost {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  body      String
+  visibility String  @default("friends")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("social_posts")
+}
+
+model WeeklyInsight {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  weekStart    DateTime @map("week_start") @db.Date
+  summary      Json
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, weekStart])
+  @@map("weekly_insights")
+}
+
+model ExportJob {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  format    String
+  status    String   @default("ready")
+  payload   Json?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("export_jobs")
+}
+
+model Subscription {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String   @map("user_id") @db.Uuid
+  plan             String   @default("free")
+  status           String   @default("active")
+  provider         String   @default("manual")
+  externalId       String?  @map("external_id")
+  currentPeriodEnd DateTime? @map("current_period_end") @db.Timestamptz
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("subscriptions")
+}
+
+model RateLimitBucket {
+  id          String   @id @default(uuid()) @db.Uuid
+  bucketKey   String   @map("bucket_key")
+  routeKey    String   @map("route_key")
+  windowStart DateTime @map("window_start") @db.Timestamptz
+  count       Int      @default(0)
+  userId      String?  @map("user_id") @db.Uuid
+
+  user AppUser? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([bucketKey, routeKey, windowStart])
+  @@map("rate_limit_buckets")
+}
+
+model AnalyticsEvent {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String?  @map("user_id") @db.Uuid
+  name      String
+  props     Json?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user AppUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([name, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("analytics_events")
 }

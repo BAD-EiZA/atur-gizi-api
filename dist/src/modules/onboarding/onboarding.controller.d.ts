@@ -1,9 +1,13 @@
 import { AuthenticatedUser } from '../../common/auth/auth.types';
 import { OnboardingService } from './onboarding.service';
 import { CompleteOnboardingDto, PreviewTargetDto } from './dto/onboarding.dto';
+import { IdempotencyService } from '../../common/idempotency/idempotency.service';
+import { AnalyticsService } from '../../common/analytics/analytics.service';
 export declare class OnboardingController {
     private readonly onboarding;
-    constructor(onboarding: OnboardingService);
+    private readonly idempotency;
+    private readonly analytics;
+    constructor(onboarding: OnboardingService, idempotency: IdempotencyService, analytics: AnalyticsService);
     preview(dto: PreviewTargetDto): {
         age_years: number;
         bmr_kcal: number | null;
@@ -33,7 +37,7 @@ export declare class OnboardingController {
         };
         disclaimer: string;
     };
-    complete(user: AuthenticatedUser, dto: CompleteOnboardingDto): Promise<{
+    complete(user: AuthenticatedUser, dto: CompleteOnboardingDto, idemKey?: string): Promise<import("@prisma/client/runtime/library").JsonValue | {
         onboarding_completed: boolean;
         age_years: number;
         bmr_kcal: number | null;

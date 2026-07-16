@@ -121,8 +121,8 @@ export declare class UsersService {
         effectiveFrom: Date;
     }): Promise<{
         id: string;
-        createdAt: Date;
         userId: string;
+        createdAt: Date;
         effectiveFrom: Date;
         effectiveTo: Date | null;
         bmrKcal: number | null;

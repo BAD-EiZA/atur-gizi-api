@@ -112,11 +112,21 @@ let AiService = class AiService {
         });
         const started = Date.now();
         try {
-            const imageUrl = this.media.signedDeliveryUrl(dto.cloudinaryPublicId) ?? undefined;
+            let imageBase64 = dto.imageBase64;
+            let mimeType = dto.mimeType ?? 'image/jpeg';
+            if (!imageBase64) {
+                const fetched = await this.media.fetchAsBase64(dto.cloudinaryPublicId);
+                if (fetched) {
+                    imageBase64 = fetched.data;
+                    mimeType = fetched.mimeType;
+                }
+            }
+            if (!imageBase64) {
+                throw new app_exception_1.AppException('AI_IMAGE_UNAVAILABLE', 'Gambar tidak dapat dibaca untuk analisis. Coba unggah ulang.', common_1.HttpStatus.BAD_REQUEST);
+            }
             const raw = await this.gemini.analyzeImage({
-                imageBase64: dto.imageBase64,
-                mimeType: dto.mimeType,
-                imageUrl: dto.imageBase64 ? undefined : imageUrl,
+                imageBase64,
+                mimeType,
             });
             const normalized = this.normalize(raw);
             const updated = await this.prisma.aiAnalysisRun.update({

@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   Param,
   Patch,
   Post,
@@ -18,11 +19,17 @@ import {
   EstimateActivityDto,
   UpdateActivityLogDto,
 } from './dto/activity.dto';
+import { IdempotencyService } from '../../common/idempotency/idempotency.service';
+import { AnalyticsService } from '../../common/analytics/analytics.service';
 
 @Controller('v1')
 @UseGuards(AuthGuard)
 export class ActivitiesController {
-  constructor(private readonly activities: ActivitiesService) {}
+  constructor(
+    private readonly activities: ActivitiesService,
+    private readonly idempotency: IdempotencyService,
+    private readonly analytics: AnalyticsService,
+  ) {}
 
   @Get('activity-types')
   types() {
@@ -35,8 +42,20 @@ export class ActivitiesController {
   }
 
   @Post('activity-logs')
-  create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateActivityLogDto) {
-    return this.activities.create(user.appUserId, dto);
+  async create(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreateActivityLogDto,
+    @Headers('idempotency-key') idemKey?: string,
+  ) {
+    const route = 'POST /v1/activity-logs';
+    const started = await this.idempotency.begin(user.appUserId, idemKey, route, dto);
+    if (started?.replay) return started.body;
+    const result = await this.activities.create(user.appUserId, dto);
+    if (idemKey && started && !started.replay) {
+      await this.idempotency.save(user.appUserId, idemKey, route, started.requestHash, 201, result);
+    }
+    await this.analytics.track(user.appUserId, 'activity_log_created');
+    return result;
   }
 
   @Get('activity-logs')

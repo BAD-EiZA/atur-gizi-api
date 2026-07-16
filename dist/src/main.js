@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+require("dotenv/config");
 const core_1 = require("@nestjs/core");
 const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
@@ -8,7 +9,9 @@ const all_exceptions_filter_1 = require("./common/filters/all-exceptions.filter"
 const request_id_interceptor_1 = require("./common/interceptors/request-id.interceptor");
 const config_1 = require("@nestjs/config");
 async function bootstrap() {
-    const app = await core_1.NestFactory.create(app_module_1.AppModule);
+    const app = await core_1.NestFactory.create(app_module_1.AppModule, {
+        logger: ['error', 'warn', 'log'],
+    });
     const config = app.get(config_1.ConfigService);
     app.useGlobalPipes(new common_1.ValidationPipe({
         whitelist: true,
@@ -35,7 +38,7 @@ async function bootstrap() {
     app.getHttpAdapter().get('/openapi.json', (_req, res) => {
         res.json(document);
     });
-    const port = config.get('port') ?? 4000;
+    const port = Number(process.env.PORT ?? config.get('port') ?? 4000);
     await app.listen(port);
     console.log(`atur-gizi-api listening on ${port}`);
 }

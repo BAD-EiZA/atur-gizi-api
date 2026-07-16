@@ -14,6 +14,7 @@ const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const configuration_1 = __importDefault(require("./config/configuration"));
 const prisma_module_1 = require("./prisma/prisma.module");
+const common_module_1 = require("./common/common.module");
 const health_module_1 = require("./modules/health/health.module");
 const users_module_1 = require("./modules/users/users.module");
 const onboarding_module_1 = require("./modules/onboarding/onboarding.module");
@@ -23,6 +24,7 @@ const dashboard_module_1 = require("./modules/dashboard/dashboard.module");
 const media_module_1 = require("./modules/media/media.module");
 const ai_module_1 = require("./modules/ai/ai.module");
 const account_module_1 = require("./modules/account/account.module");
+const features_module_1 = require("./modules/features/features.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -31,6 +33,7 @@ exports.AppModule = AppModule = __decorate([
         imports: [
             config_1.ConfigModule.forRoot({ isGlobal: true, load: [configuration_1.default] }),
             prisma_module_1.PrismaModule,
+            common_module_1.CommonModule,
             health_module_1.HealthModule,
             users_module_1.UsersModule,
             onboarding_module_1.OnboardingModule,
@@ -40,6 +43,7 @@ exports.AppModule = AppModule = __decorate([
             media_module_1.MediaModule,
             ai_module_1.AiModule,
             account_module_1.AccountModule,
+            features_module_1.FeaturesModule,
         ],
     })
 ], AppModule);

@@ -20,13 +20,28 @@ const auth_types_1 = require("../../common/auth/auth.types");
 const nutrition_service_1 = require("./nutrition.service");
 const food_log_dto_1 = require("./dto/food-log.dto");
 const client_1 = require("@prisma/client");
+const idempotency_service_1 = require("../../common/idempotency/idempotency.service");
+const analytics_service_1 = require("../../common/analytics/analytics.service");
 let NutritionController = class NutritionController {
     nutrition;
-    constructor(nutrition) {
+    idempotency;
+    analytics;
+    constructor(nutrition, idempotency, analytics) {
         this.nutrition = nutrition;
+        this.idempotency = idempotency;
+        this.analytics = analytics;
     }
-    create(user, dto) {
-        return this.nutrition.create(user.appUserId, dto);
+    async create(user, dto, idemKey) {
+        const route = 'POST /v1/food-logs';
+        const started = await this.idempotency.begin(user.appUserId, idemKey, route, dto);
+        if (started?.replay)
+            return started.body;
+        const result = await this.nutrition.create(user.appUserId, dto);
+        if (idemKey && started && !started.replay) {
+            await this.idempotency.save(user.appUserId, idemKey, route, started.requestHash, 201, result);
+        }
+        await this.analytics.track(user.appUserId, 'food_log_created_manual');
+        return result;
     }
     list(user, from, to, mealType, cursor, limit) {
         return this.nutrition.list(user.appUserId, {
@@ -52,9 +67,11 @@ __decorate([
     (0, common_1.Post)(),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Headers)('idempotency-key')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [auth_types_1.AuthenticatedUser, food_log_dto_1.CreateFoodLogDto]),
-    __metadata("design:returntype", void 0)
+    __metadata("design:paramtypes", [auth_types_1.AuthenticatedUser,
+        food_log_dto_1.CreateFoodLogDto, String]),
+    __metadata("design:returntype", Promise)
 ], NutritionController.prototype, "create", null);
 __decorate([
     (0, common_1.Get)(),
@@ -96,6 +113,8 @@ __decorate([
 exports.NutritionController = NutritionController = __decorate([
     (0, common_1.Controller)('v1/food-logs'),
     (0, common_1.UseGuards)(auth_guard_1.AuthGuard),
-    __metadata("design:paramtypes", [nutrition_service_1.NutritionService])
+    __metadata("design:paramtypes", [nutrition_service_1.NutritionService,
+        idempotency_service_1.IdempotencyService,
+        analytics_service_1.AnalyticsService])
 ], NutritionController);
 //# sourceMappingURL=nutrition.controller.js.map

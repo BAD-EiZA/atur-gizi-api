@@ -17,4 +17,8 @@ export declare class MediaService {
     assertOwnedPublicId(userId: string, publicId: string): void;
     destroy(publicId: string): Promise<any>;
     signedDeliveryUrl(publicId: string): string | null;
+    fetchAsBase64(publicId: string): Promise<{
+        data: string;
+        mimeType: string;
+    } | null>;
 }

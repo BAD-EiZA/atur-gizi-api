@@ -101,6 +101,24 @@ let MediaService = class MediaService {
             transformation: [{ width: 1280, crop: 'limit', quality: 'auto', fetch_format: 'auto' }],
         });
     }
+    async fetchAsBase64(publicId) {
+        if (!this.isConfigured())
+            return null;
+        try {
+            const url = this.signedDeliveryUrl(publicId);
+            if (!url)
+                return null;
+            const res = await fetch(url);
+            if (!res.ok)
+                return null;
+            const buf = Buffer.from(await res.arrayBuffer());
+            const mimeType = res.headers.get('content-type') || 'image/jpeg';
+            return { data: buf.toString('base64'), mimeType };
+        }
+        catch {
+            return null;
+        }
+    }
 };
 exports.MediaService = MediaService;
 exports.MediaService = MediaService = __decorate([

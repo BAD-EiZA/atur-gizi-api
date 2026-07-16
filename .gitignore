@@ -7,3 +7,6 @@ dist
 .vercel
 coverage
 *.log
+
+.vercel
+.env*
