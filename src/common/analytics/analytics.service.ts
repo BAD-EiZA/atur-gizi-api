@@ -7,10 +7,21 @@ export class AnalyticsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async track(userId: string | null, name: string, props?: Record<string, unknown>) {
+    if (userId) {
+      const settings = await this.prisma.userSettings.findUnique({
+        where: { userId },
+        select: { analyticsConsent: true },
+      });
+      if (!settings?.analyticsConsent) return;
+    }
     const safe: Record<string, unknown> = {};
     if (props) {
       for (const [k, v] of Object.entries(props)) {
-        if (['name', 'title', 'photo', 'weight', 'dob', 'email', 'image'].some((x) => k.toLowerCase().includes(x))) {
+        if (
+          ['name', 'title', 'photo', 'weight', 'dob', 'email', 'image'].some((x) => k.toLowerCase().includes(x)) ||
+          !['string', 'number', 'boolean'].includes(typeof v) ||
+          (typeof v === 'string' && v.length > 100)
+        ) {
           continue;
         }
         safe[k] = v;

@@ -78,7 +78,7 @@ export class MediaService {
 
   assertOwnedPublicId(userId: string, publicId: string) {
     const prefix = this.folder(userId);
-    if (!publicId.startsWith(prefix)) {
+    if (!publicId.startsWith(`${prefix}/`)) {
       throw new AppException(
         'MEDIA_OWNERSHIP_DENIED',
         'Asset media tidak valid untuk pengguna ini.',
@@ -117,8 +117,14 @@ export class MediaService {
       if (!url) return null;
       const res = await fetch(url);
       if (!res.ok) return null;
+      const mimeType = res.headers.get('content-type')?.split(';')[0] || 'image/jpeg';
+      const maxBytes = 10 * 1024 * 1024;
+      const contentLength = Number(res.headers.get('content-length'));
+      if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType) || contentLength > maxBytes) {
+        return null;
+      }
       const buf = Buffer.from(await res.arrayBuffer());
-      const mimeType = res.headers.get('content-type') || 'image/jpeg';
+      if (buf.length > maxBytes) return null;
       return { data: buf.toString('base64'), mimeType };
     } catch {
       return null;

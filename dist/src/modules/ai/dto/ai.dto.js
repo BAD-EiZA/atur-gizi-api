@@ -25,36 +25,43 @@ class StartAnalysisDto {
 exports.StartAnalysisDto = StartAnalysisDto;
 __decorate([
     (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MaxLength)(512),
     __metadata("design:type", String)
 ], StartAnalysisDto.prototype, "cloudinaryPublicId", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MaxLength)(32),
     __metadata("design:type", String)
 ], StartAnalysisDto.prototype, "mediaDeliveryType", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MaxLength)(32),
     __metadata("design:type", String)
 ], StartAnalysisDto.prototype, "mediaVersion", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MaxLength)(16),
     __metadata("design:type", String)
 ], StartAnalysisDto.prototype, "mediaFormat", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsInt)(),
+    (0, class_validator_1.Min)(1),
+    (0, class_validator_1.Max)(10 * 1024 * 1024),
     __metadata("design:type", Number)
 ], StartAnalysisDto.prototype, "mediaBytes", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MaxLength)(14 * 1024 * 1024),
     __metadata("design:type", String)
 ], StartAnalysisDto.prototype, "imageBase64", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsEnum)(['image/jpeg', 'image/png', 'image/webp']),
     __metadata("design:type", String)
 ], StartAnalysisDto.prototype, "mimeType", void 0);
 class ConfirmItemDto {

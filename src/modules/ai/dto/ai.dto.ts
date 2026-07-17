@@ -8,6 +8,8 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
+  MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -15,31 +17,38 @@ import { MealType } from '@prisma/client';
 
 export class StartAnalysisDto {
   @IsString()
+  @MaxLength(512)
   cloudinaryPublicId!: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(32)
   mediaDeliveryType?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(32)
   mediaVersion?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(16)
   mediaFormat?: string;
 
   @IsOptional()
   @IsInt()
+  @Min(1)
+  @Max(10 * 1024 * 1024)
   mediaBytes?: number;
 
   /** Dev-only: base64 image when Cloudinary mock */
   @IsOptional()
   @IsString()
+  @MaxLength(14 * 1024 * 1024)
   imageBase64?: string;
 
   @IsOptional()
-  @IsString()
+  @IsEnum(['image/jpeg', 'image/png', 'image/webp'])
   mimeType?: string;
 }
 
