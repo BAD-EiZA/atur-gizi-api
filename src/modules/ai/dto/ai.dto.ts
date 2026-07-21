@@ -38,13 +38,13 @@ export class StartAnalysisDto {
   @IsOptional()
   @IsInt()
   @Min(1)
-  @Max(10 * 1024 * 1024)
+  @Max(50 * 1024 * 1024)
   mediaBytes?: number;
 
   /** Dev-only: base64 image when Cloudinary mock */
   @IsOptional()
   @IsString()
-  @MaxLength(14 * 1024 * 1024)
+  @MaxLength(Math.ceil(50 * 1024 * 1024 * (4 / 3)))
   imageBase64?: string;
 
   @IsOptional()

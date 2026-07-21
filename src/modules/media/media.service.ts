@@ -118,7 +118,7 @@ export class MediaService {
       const res = await fetch(url);
       if (!res.ok) return null;
       const mimeType = res.headers.get('content-type')?.split(';')[0] || 'image/jpeg';
-      const maxBytes = 10 * 1024 * 1024;
+      const maxBytes = 50 * 1024 * 1024;
       const contentLength = Number(res.headers.get('content-length'));
       if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType) || contentLength > maxBytes) {
         return null;
