@@ -43,6 +43,11 @@ export class FeaturesController {
     return this.features.macroTargets(user.appUserId);
   }
 
+  @Get('food-references')
+  foodRefs(@Query('q') q?: string) {
+    return this.features.searchFoodReferences(q ?? '');
+  }
+
   @Get('favorites/foods')
   favFoods(@CurrentUser() user: AuthenticatedUser) {
     return this.features.listFavoriteFoods(user.appUserId);
@@ -107,6 +112,9 @@ export class FeaturesController {
       mealType: MealType;
       items: unknown[];
       totalCalories: number;
+      proteinG?: number;
+      carbsG?: number;
+      fatG?: number;
       notes?: string;
     },
   ) {
@@ -170,8 +178,22 @@ export class FeaturesController {
   syncWearable(
     @CurrentUser() user: AuthenticatedUser,
     @Param('provider') provider: string,
+    @Body()
+    body?: {
+      activities?: Array<{
+        name?: string;
+        activityTypeSlug?: string;
+        durationMinutes: number;
+        caloriesBurned?: number;
+        distanceM?: number;
+        avgHr?: number;
+        startedAt?: string;
+        intensity?: 'low' | 'moderate' | 'high';
+      }>;
+      demo?: boolean;
+    },
   ) {
-    return this.features.syncWearable(user.appUserId, provider);
+    return this.features.syncWearable(user.appUserId, provider, body);
   }
 
   @Delete('wearables/:provider')

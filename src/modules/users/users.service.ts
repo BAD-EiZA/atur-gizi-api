@@ -3,11 +3,16 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { AuthClaims } from '../../common/auth/auth.types';
 import { AppException } from '../../common/errors/app.exception';
 import { HttpStatus } from '@nestjs/common';
-import { PatchProfileDto, PatchSettingsDto } from './dto/profile.dto';
-import { computeTarget } from '../../common/utils/nutrition.util';
-import { ageFromDob, parseDateOnly } from '../../common/utils/date.util';
+import {
+  CreateWeightLogDto,
+  PatchMacroTargetsDto,
+  PatchProfileDto,
+  PatchSettingsDto,
+} from './dto/profile.dto';
+import { computeMacroTargets, computeTarget } from '../../common/utils/nutrition.util';
+import { ageFromDob, localDateString, parseDateOnly } from '../../common/utils/date.util';
 import { ConfigService } from '@nestjs/config';
-import { FitnessGoal } from '@prisma/client';
+import { BiologicalSex, FitnessGoal, MetabolicFormula } from '@prisma/client';
 
 @Injectable()
 export class UsersService {
@@ -69,6 +74,20 @@ export class UsersService {
       this.assertMinAge(dto.dateOfBirth);
     }
 
+    const affectsTarget =
+      dto.currentWeightKg != null ||
+      dto.fitnessGoal != null ||
+      dto.activityLevel != null ||
+      dto.metabolicFormula != null ||
+      dto.targetRate != null ||
+      dto.heightCm != null ||
+      dto.dateOfBirth != null ||
+      dto.sex != null;
+
+    let formula = dto.metabolicFormula;
+    if (dto.sex === BiologicalSex.male && !formula) formula = MetabolicFormula.mifflin_a;
+    if (dto.sex === BiologicalSex.female && !formula) formula = MetabolicFormula.mifflin_b;
+
     await this.prisma.$transaction(async (tx) => {
       if (dto.displayName !== undefined) {
         await tx.appUser.update({
@@ -82,13 +101,28 @@ export class UsersService {
           dateOfBirth: dto.dateOfBirth ? parseDateOnly(dto.dateOfBirth) : undefined,
           heightCm: dto.heightCm,
           currentWeightKg: dto.currentWeightKg,
-          metabolicFormula: dto.metabolicFormula,
+          sex: dto.sex,
+          metabolicFormula: formula,
           activityLevel: dto.activityLevel,
           fitnessGoal: dto.fitnessGoal,
           targetRate: dto.targetRate,
         },
       });
+      if (dto.currentWeightKg != null) {
+        await tx.weightLog.create({
+          data: {
+            userId: appUserId,
+            loggedAt: new Date(),
+            weightKg: dto.currentWeightKg,
+            source: 'profile',
+          },
+        });
+      }
     });
+
+    if (affectsTarget) {
+      await this.refreshTargetFromProfile(appUserId);
+    }
 
     return this.me(appUserId);
   }
@@ -102,9 +136,104 @@ export class UsersService {
         locale: dto.locale,
         retainFoodPhotos: dto.retainFoodPhotos,
         analyticsConsent: dto.analyticsConsent,
+        calorieBudgetMode: dto.calorieBudgetMode,
       },
     });
     return this.me(appUserId);
+  }
+
+  async refreshTargetFromProfile(appUserId: string) {
+    const user = await this.prisma.appUser.findUnique({
+      where: { id: appUserId },
+      include: { profile: true, settings: true },
+    });
+    const p = user?.profile;
+    if (!p?.currentWeightKg || !p.heightCm || !p.dateOfBirth || !p.fitnessGoal) return null;
+    const ageYears = ageFromDob(p.dateOfBirth);
+    const weightKg = Number(p.currentWeightKg);
+    const heightCm = Number(p.heightCm);
+    const settings = user?.settings;
+    const tz = settings?.timezone ?? 'Asia/Jakarta';
+    const effectiveFrom = parseDateOnly(localDateString(new Date(), tz));
+    return this.createTargetSnapshot(appUserId, {
+      formula: p.metabolicFormula,
+      weightKg,
+      heightCm,
+      ageYears,
+      activityLevel: p.activityLevel,
+      goal: p.fitnessGoal,
+      targetRatePct: p.targetRate != null ? Number(p.targetRate) : null,
+      effectiveFrom,
+    });
+  }
+
+  async createWeightLog(appUserId: string, dto: CreateWeightLogDto) {
+    const loggedAt = dto.loggedAt ? new Date(dto.loggedAt) : new Date();
+    const row = await this.prisma.weightLog.create({
+      data: {
+        userId: appUserId,
+        loggedAt,
+        weightKg: dto.weightKg,
+        note: dto.note,
+        source: 'manual',
+      },
+    });
+    await this.prisma.userProfile.update({
+      where: { userId: appUserId },
+      data: { currentWeightKg: dto.weightKg },
+    });
+    await this.refreshTargetFromProfile(appUserId);
+    return {
+      id: row.id,
+      weight_kg: Number(row.weightKg),
+      logged_at: row.loggedAt.toISOString(),
+      note: row.note,
+    };
+  }
+
+  async listWeightLogs(appUserId: string, limit = 30) {
+    const rows = await this.prisma.weightLog.findMany({
+      where: { userId: appUserId },
+      orderBy: { loggedAt: 'desc' },
+      take: Math.min(limit, 90),
+    });
+    return {
+      data: rows.map((r) => ({
+        id: r.id,
+        weight_kg: Number(r.weightKg),
+        logged_at: r.loggedAt.toISOString(),
+        note: r.note,
+        source: r.source,
+      })),
+    };
+  }
+
+  async patchMacroTargets(appUserId: string, dto: PatchMacroTargetsDto) {
+    const latest = await this.prisma.dailyTarget.findFirst({
+      where: { userId: appUserId, effectiveTo: null },
+      orderBy: { effectiveFrom: 'desc' },
+    });
+    if (!latest) {
+      throw new AppException(
+        'NO_TARGET',
+        'Belum ada target harian. Lengkapi profil/onboarding dulu.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    const updated = await this.prisma.dailyTarget.update({
+      where: { id: latest.id },
+      data: {
+        proteinTargetG: dto.proteinG,
+        carbsTargetG: dto.carbsG,
+        fatTargetG: dto.fatG,
+      },
+    });
+    return {
+      calorie_target: updated.calorieTarget,
+      protein_g: updated.proteinTargetG != null ? Number(updated.proteinTargetG) : null,
+      carbs_g: updated.carbsTargetG != null ? Number(updated.carbsTargetG) : null,
+      fat_g: updated.fatTargetG != null ? Number(updated.fatTargetG) : null,
+    };
   }
 
   assertMinAge(dateOfBirth: string) {
@@ -147,6 +276,11 @@ export class UsersService {
         data: { effectiveTo: dayBefore },
       });
     }
+    const macros = computeMacroTargets({
+      calorieTarget: computed.calorieTarget,
+      weightKg: input.weightKg,
+      goal: input.goal,
+    });
     return this.prisma.dailyTarget.create({
       data: {
         userId: appUserId,
@@ -154,9 +288,15 @@ export class UsersService {
         bmrKcal: computed.bmrKcal,
         tdeeKcal: computed.tdeeKcal,
         calorieTarget: computed.calorieTarget,
+        proteinTargetG: macros.proteinG,
+        carbsTargetG: macros.carbsG,
+        fatTargetG: macros.fatG,
         goal: input.goal,
         calculationMethod: computed.calculationMethod,
-        calculationInputs: computed.calculationInputs as object,
+        calculationInputs: {
+          ...computed.calculationInputs,
+          macros_method: macros.method,
+        } as object,
       },
     });
   }
@@ -171,6 +311,7 @@ export class UsersService {
       dateOfBirth: Date | null;
       heightCm: { toNumber?: () => number } | number | null;
       currentWeightKg: { toNumber?: () => number } | number | null;
+      sex?: string;
       metabolicFormula: string;
       activityLevel: string | null;
       fitnessGoal: string | null;
@@ -184,6 +325,7 @@ export class UsersService {
       locale: string;
       retainFoodPhotos: boolean;
       analyticsConsent: boolean;
+      calorieBudgetMode?: string;
     } | null;
   }) {
     const num = (v: { toNumber?: () => number } | number | null | undefined) => {
@@ -205,6 +347,7 @@ export class UsersService {
               : null,
             height_cm: num(user.profile.heightCm),
             current_weight_kg: num(user.profile.currentWeightKg),
+            sex: user.profile.sex ?? 'unspecified',
             metabolic_formula: user.profile.metabolicFormula,
             activity_level: user.profile.activityLevel,
             fitness_goal: user.profile.fitnessGoal,
@@ -219,6 +362,7 @@ export class UsersService {
             locale: user.settings.locale,
             retain_food_photos: user.settings.retainFoodPhotos,
             analytics_consent: user.settings.analyticsConsent,
+            calorie_budget_mode: user.settings.calorieBudgetMode ?? 'intake_only',
           }
         : null,
     };

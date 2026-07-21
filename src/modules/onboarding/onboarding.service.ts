@@ -2,7 +2,7 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { CompleteOnboardingDto, PreviewTargetDto } from './dto/onboarding.dto';
 import { ageFromDob, localDateString, parseDateOnly } from '../../common/utils/date.util';
-import { computeTarget } from '../../common/utils/nutrition.util';
+import { computeMacroTargets, computeTarget } from '../../common/utils/nutrition.util';
 import { AppException } from '../../common/errors/app.exception';
 import { PrismaService } from '../../prisma/prisma.service';
 
@@ -103,6 +103,11 @@ export class OnboardingService {
           data: { effectiveTo: dayBefore },
         });
       }
+      const macros = computeMacroTargets({
+        calorieTarget: preview.calorie_target,
+        weightKg: dto.weightKg,
+        goal: dto.fitnessGoal,
+      });
       await tx.dailyTarget.create({
         data: {
           userId: appUserId,
@@ -110,9 +115,15 @@ export class OnboardingService {
           bmrKcal: preview.bmr_kcal,
           tdeeKcal: preview.tdee_kcal,
           calorieTarget: preview.calorie_target,
+          proteinTargetG: macros.proteinG,
+          carbsTargetG: macros.carbsG,
+          fatTargetG: macros.fatG,
           goal: dto.fitnessGoal,
           calculationMethod: preview.calculation_method,
-          calculationInputs: preview.calculation_inputs as object,
+          calculationInputs: {
+            ...(preview.calculation_inputs as object),
+            macros_method: macros.method,
+          },
         },
       });
     });

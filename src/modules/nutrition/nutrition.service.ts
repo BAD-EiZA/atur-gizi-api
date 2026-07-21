@@ -4,6 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { AppException } from '../../common/errors/app.exception';
 import { CreateFoodLogDto, FoodItemDto, UpdateFoodLogDto } from './dto/food-log.dto';
 import { localDateString, parseDateOnly } from '../../common/utils/date.util';
+import { atwaterWarning } from '../../common/utils/nutrition.util';
 
 @Injectable()
 export class NutritionService {
@@ -15,6 +16,16 @@ export class NutritionService {
     const carbsG = items.reduce((s, i) => s + (i.carbsG ?? 0), 0);
     const fatG = items.reduce((s, i) => s + (i.fatG ?? 0), 0);
     return { totalCalories, proteinG, carbsG, fatG };
+  }
+
+  private atwaterNotes(sums: {
+    totalCalories: number;
+    proteinG: number;
+    carbsG: number;
+    fatG: number;
+  }) {
+    const w = atwaterWarning(sums.totalCalories, sums.proteinG, sums.carbsG, sums.fatG);
+    return w ? [w] : [];
   }
 
   private async timezone(userId: string) {
@@ -33,6 +44,7 @@ export class NutritionService {
       ? parseDateOnly(dto.logDate)
       : parseDateOnly(localDateString(consumedAt, tz));
     const sums = this.sumItems(dto.items);
+    const warnings = this.atwaterNotes(sums);
 
     const log = await this.prisma.foodLog.create({
       data: {
@@ -67,7 +79,7 @@ export class NutritionService {
       },
       include: { items: { orderBy: { sortOrder: 'asc' } } },
     });
-    return this.serialize(log);
+    return { ...this.serialize(log), warnings };
   }
 
   async list(

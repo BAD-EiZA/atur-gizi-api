@@ -2,11 +2,16 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppException } from '../../common/errors/app.exception';
 import { localDateString, parseDateOnly } from '../../common/utils/date.util';
-import { MealType } from '@prisma/client';
+import { computeMacroTargets } from '../../common/utils/nutrition.util';
+import { Intensity, MealType } from '@prisma/client';
+import { ActivitiesService } from '../activities/activities.service';
 
 @Injectable()
 export class FeaturesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly activities: ActivitiesService,
+  ) {}
 
   // --- Weekly summary / insights ---
   async weeklySummary(userId: string, weekStart?: string) {
@@ -155,18 +160,29 @@ export class FeaturesService {
     return { ok: true };
   }
 
-  listFavoriteActivities(userId: string) {
-    return this.prisma.favoriteActivity.findMany({
+  async listFavoriteActivities(userId: string) {
+    const rows = await this.prisma.favoriteActivity.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
-    }).then((rows) => ({
-      data: rows.map((r) => ({
-        id: r.id,
-        activity_type_id: r.activityTypeId,
-        custom_name: r.customName,
-        default_minutes: r.defaultMinutes,
-      })),
-    }));
+    });
+    const typeIds = rows.map((r) => r.activityTypeId).filter(Boolean) as string[];
+    const types =
+      typeIds.length > 0
+        ? await this.prisma.activityType.findMany({ where: { id: { in: typeIds } } })
+        : [];
+    const byId = new Map(types.map((t) => [t.id, t]));
+    return {
+      data: rows.map((r) => {
+        const t = r.activityTypeId ? byId.get(r.activityTypeId) : null;
+        return {
+          id: r.id,
+          activity_type_id: r.activityTypeId,
+          custom_name: r.customName,
+          default_minutes: r.defaultMinutes,
+          name: t?.name ?? r.customName ?? 'Aktivitas',
+        };
+      }),
+    };
   }
 
   async createFavoriteActivity(
@@ -214,6 +230,9 @@ export class FeaturesService {
         meal_type: r.mealType,
         items: r.items,
         total_calories: r.totalCalories,
+        protein_g: r.proteinG != null ? Number(r.proteinG) : null,
+        carbs_g: r.carbsG != null ? Number(r.carbsG) : null,
+        fat_g: r.fatG != null ? Number(r.fatG) : null,
         notes: r.notes,
       })),
     }));
@@ -227,6 +246,9 @@ export class FeaturesService {
       mealType: MealType;
       items: unknown[];
       totalCalories: number;
+      proteinG?: number;
+      carbsG?: number;
+      fatG?: number;
       notes?: string;
     },
   ) {
@@ -238,6 +260,9 @@ export class FeaturesService {
         mealType: dto.mealType,
         items: dto.items as object,
         totalCalories: dto.totalCalories,
+        proteinG: dto.proteinG,
+        carbsG: dto.carbsG,
+        fatG: dto.fatG,
         notes: dto.notes,
       },
     });
@@ -252,14 +277,100 @@ export class FeaturesService {
   }
 
   // --- Barcode ---
+  private async fetchOpenFoodFacts(barcode: string) {
+    try {
+      const res = await fetch(
+        `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}.json`,
+        {
+          headers: {
+            'User-Agent': 'AturGizi/1.0 (nutrition tracker; contact@atur-gizi.local)',
+          },
+        },
+      );
+      if (!res.ok) return null;
+      const body = (await res.json()) as {
+        status?: number;
+        product?: {
+          product_name?: string;
+          brands?: string;
+          serving_size?: string;
+          nutriments?: Record<string, number | undefined>;
+        };
+      };
+      if (body.status !== 1 || !body.product) return null;
+      const n = body.product.nutriments ?? {};
+      // prefer per serving, else 100g
+      const kcal =
+        n['energy-kcal_serving'] ??
+        n['energy-kcal_100g'] ??
+        (n['energy_serving'] != null ? Number(n['energy_serving']) / 4.184 : null) ??
+        (n['energy_100g'] != null ? Number(n['energy_100g']) / 4.184 : null);
+      if (kcal == null || !Number.isFinite(Number(kcal))) return null;
+      return {
+        name: body.product.product_name || `Produk ${barcode}`,
+        brand: body.product.brands || null,
+        servingSize: body.product.serving_size || null,
+        calories: Math.round(Number(kcal)),
+        proteinG: Number(n.proteins_serving ?? n.proteins_100g ?? 0) || 0,
+        carbsG: Number(n.carbohydrates_serving ?? n.carbohydrates_100g ?? 0) || 0,
+        fatG: Number(n.fat_serving ?? n.fat_100g ?? 0) || 0,
+        source: 'open_food_facts',
+      };
+    } catch {
+      return null;
+    }
+  }
+
   async lookupBarcode(userId: string, barcode: string) {
     let product = await this.prisma.barcodeProduct.findUnique({ where: { barcode } });
     if (!product) {
+      const off = await this.fetchOpenFoodFacts(barcode);
+      if (off) {
+        product = await this.prisma.barcodeProduct.create({
+          data: {
+            barcode,
+            name: off.name,
+            brand: off.brand,
+            servingSize: off.servingSize,
+            calories: off.calories,
+            proteinG: off.proteinG,
+            carbsG: off.carbsG,
+            fatG: off.fatG,
+            source: off.source,
+          },
+        });
+      }
+    }
+    if (!product) {
       // seed stub catalog for common demo barcodes
-      const stubs: Record<string, { name: string; calories: number; brand?: string }> = {
-        '8991002101151': { name: 'Susu UHT full cream 200ml', calories: 130, brand: 'Demo' },
-        '8996001301135': { name: 'Biskuit gandum', calories: 90, brand: 'Demo' },
-        '8999999000001': { name: 'Air mineral 600ml', calories: 0, brand: 'Demo' },
+      const stubs: Record<
+        string,
+        { name: string; calories: number; brand?: string; proteinG?: number; carbsG?: number; fatG?: number }
+      > = {
+        '8991002101151': {
+          name: 'Susu UHT full cream 200ml',
+          calories: 130,
+          brand: 'Demo',
+          proteinG: 6.5,
+          carbsG: 10,
+          fatG: 7,
+        },
+        '8996001301135': {
+          name: 'Biskuit gandum',
+          calories: 90,
+          brand: 'Demo',
+          proteinG: 1.5,
+          carbsG: 14,
+          fatG: 3,
+        },
+        '8999999000001': {
+          name: 'Air mineral 600ml',
+          calories: 0,
+          brand: 'Demo',
+          proteinG: 0,
+          carbsG: 0,
+          fatG: 0,
+        },
       };
       const stub = stubs[barcode];
       if (stub) {
@@ -269,6 +380,9 @@ export class FeaturesService {
             name: stub.name,
             brand: stub.brand,
             calories: stub.calories,
+            proteinG: stub.proteinG,
+            carbsG: stub.carbsG,
+            fatG: stub.fatG,
             source: 'catalog_stub',
           },
         });
@@ -369,11 +483,49 @@ export class FeaturesService {
     return { id: row.id, provider: row.provider, status: row.status };
   }
 
-  async syncWearable(userId: string, provider: string) {
+  async syncWearable(
+    userId: string,
+    provider: string,
+    body?: {
+      activities?: Array<{
+        name?: string;
+        activityTypeSlug?: string;
+        durationMinutes: number;
+        caloriesBurned?: number;
+        distanceM?: number;
+        avgHr?: number;
+        startedAt?: string;
+        intensity?: Intensity;
+      }>;
+      demo?: boolean;
+    },
+  ) {
     const row = await this.prisma.wearableLink.findUnique({
       where: { userId_provider: { userId, provider } },
     });
     if (!row) throw new AppException('NOT_CONNECTED', 'Wearable belum terhubung.', HttpStatus.NOT_FOUND);
+
+    let payload = body?.activities ?? [];
+    if ((!payload || payload.length === 0) && body?.demo !== false) {
+      // demo sample when no payload — enables end-to-end test without OAuth
+      payload = [
+        {
+          name: 'Lari pagi (demo perangkat)',
+          activityTypeSlug: 'running',
+          durationMinutes: 30,
+          caloriesBurned: 310,
+          distanceM: 4500,
+          avgHr: 148,
+          intensity: Intensity.moderate,
+        },
+      ];
+    }
+
+    const imported =
+      payload.length > 0
+        ? await this.activities.importDeviceActivities(userId, payload)
+        : { imported: 0, ids: [] as string[] };
+
     await this.prisma.wearableLink.update({
       where: { id: row.id },
       data: { lastSyncAt: new Date() },
@@ -381,8 +533,12 @@ export class FeaturesService {
     return {
       provider,
       synced_at: new Date().toISOString(),
-      imported_activities: 0,
-      note: 'Sinkronisasi stub — integrasi native menyusul.',
+      imported_activities: imported.imported,
+      activity_ids: imported.ids,
+      note:
+        imported.imported > 0
+          ? 'Aktivitas perangkat diimpor (source=device). OAuth native menyusul.'
+          : 'Tidak ada aktivitas di payload. Kirim body.activities[] atau demo sample.',
     };
   }
 
@@ -462,10 +618,10 @@ export class FeaturesService {
 
     if (format === 'csv') {
       const foodCsv = [
-        'id,log_date,meal_type,title,total_calories',
+        'id,log_date,meal_type,title,total_calories,protein_g,carbs_g,fat_g',
         ...foods.map(
           (f) =>
-            `${f.id},${f.logDate.toISOString().slice(0, 10)},${f.mealType},"${(f.title || '').replace(/"/g, '""')}",${f.totalCalories}`,
+            `${f.id},${f.logDate.toISOString().slice(0, 10)},${f.mealType},"${(f.title || '').replace(/"/g, '""')}",${f.totalCalories},${f.proteinG != null ? Number(f.proteinG) : ''},${f.carbsG != null ? Number(f.carbsG) : ''},${f.fatG != null ? Number(f.fatG) : ''}`,
         ),
       ].join('\n');
       const actCsv = [
@@ -544,14 +700,60 @@ export class FeaturesService {
       where: { userId, effectiveTo: null },
       orderBy: { effectiveFrom: 'desc' },
     });
+    const profile = await this.prisma.userProfile.findUnique({ where: { userId } });
     const kcal = target?.calorieTarget ?? 2000;
-    // classic split 30P / 40C / 30F
+    const hasCustom =
+      target?.proteinTargetG != null || target?.carbsTargetG != null || target?.fatTargetG != null;
+    if (hasCustom) {
+      return {
+        calorie_target: kcal,
+        protein_g: Math.round(Number(target!.proteinTargetG)),
+        carbs_g: Math.round(Number(target!.carbsTargetG)),
+        fat_g: Math.round(Number(target!.fatTargetG)),
+        method: 'custom',
+        split: { protein_pct: null, carbs_pct: null, fat_pct: null, custom: true },
+      };
+    }
+    const m = computeMacroTargets({
+      calorieTarget: kcal,
+      weightKg: profile?.currentWeightKg != null ? Number(profile.currentWeightKg) : 70,
+      goal: (target?.goal ?? profile?.fitnessGoal ?? 'maintain') as string,
+    });
     return {
       calorie_target: kcal,
-      protein_g: Math.round((kcal * 0.3) / 4),
-      carbs_g: Math.round((kcal * 0.4) / 4),
-      fat_g: Math.round((kcal * 0.3) / 9),
-      split: { protein_pct: 30, carbs_pct: 40, fat_pct: 30 },
+      protein_g: m.proteinG,
+      carbs_g: m.carbsG,
+      fat_g: m.fatG,
+      method: m.method,
+      split: { protein_pct: null, carbs_pct: null, fat_pct: null, custom: false },
+    };
+  }
+
+  async searchFoodReferences(q: string) {
+    const term = q.trim();
+    if (!term) return { data: [] };
+    const rows = await this.prisma.foodReference.findMany({
+      where: {
+        active: true,
+        OR: [
+          { name: { contains: term, mode: 'insensitive' } },
+          { aliases: { has: term.toLowerCase() } },
+        ],
+      },
+      take: 20,
+    });
+    return {
+      data: rows.map((r) => ({
+        id: r.id,
+        slug: r.slug,
+        name: r.name,
+        portion_amount: Number(r.portionAmount),
+        portion_unit: r.portionUnit,
+        calories: r.calories,
+        protein_g: Number(r.proteinG),
+        carbs_g: Number(r.carbsG),
+        fat_g: Number(r.fatG),
+      })),
     };
   }
 }

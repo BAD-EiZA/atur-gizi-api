@@ -15,6 +15,7 @@ import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { AuthenticatedUser } from '../../common/auth/auth.types';
 import { ActivitiesService } from './activities.service';
 import {
+  AnalyzeActivityScreenshotDto,
   CreateActivityLogDto,
   EstimateActivityDto,
   UpdateActivityLogDto,
@@ -39,6 +40,16 @@ export class ActivitiesController {
   @Post('activity-estimates')
   estimate(@CurrentUser() user: AuthenticatedUser, @Body() dto: EstimateActivityDto) {
     return this.activities.estimate(user.appUserId, dto);
+  }
+
+  @Post('activity-screenshot-analyses')
+  async analyzeScreenshot(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: AnalyzeActivityScreenshotDto,
+  ) {
+    const result = await this.activities.analyzeScreenshot(user.appUserId, dto);
+    await this.analytics.track(user.appUserId, 'activity_screenshot_analyzed');
+    return result;
   }
 
   @Post('activity-logs')

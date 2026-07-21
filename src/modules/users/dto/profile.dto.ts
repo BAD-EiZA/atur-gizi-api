@@ -8,7 +8,14 @@ import {
   Max,
   Min,
 } from 'class-validator';
-import { ActivityLevel, FitnessGoal, MetabolicFormula, UnitSystem } from '@prisma/client';
+import {
+  ActivityLevel,
+  BiologicalSex,
+  CalorieBudgetMode,
+  FitnessGoal,
+  MetabolicFormula,
+  UnitSystem,
+} from '@prisma/client';
 
 export class PatchProfileDto {
   @IsOptional()
@@ -30,6 +37,10 @@ export class PatchProfileDto {
   @Min(20)
   @Max(400)
   currentWeightKg?: number;
+
+  @IsOptional()
+  @IsEnum(BiologicalSex)
+  sex?: BiologicalSex;
 
   @IsOptional()
   @IsEnum(MetabolicFormula)
@@ -68,4 +79,40 @@ export class PatchSettingsDto {
   @IsOptional()
   @IsBoolean()
   analyticsConsent?: boolean;
+
+  @IsOptional()
+  @IsEnum(CalorieBudgetMode)
+  calorieBudgetMode?: CalorieBudgetMode;
+}
+
+export class CreateWeightLogDto {
+  @IsNumber()
+  @Min(20)
+  @Max(400)
+  weightKg!: number;
+
+  @IsOptional()
+  @IsDateString()
+  loggedAt?: string;
+
+  @IsOptional()
+  @IsString()
+  note?: string;
+}
+
+export class PatchMacroTargetsDto {
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  proteinG?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  carbsG?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  fatG?: number;
 }

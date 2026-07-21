@@ -7,7 +7,8 @@ import { GeminiClient, GeminiFoodResult } from './gemini.client';
 import { ConfirmAnalysisDto, StartAnalysisDto } from './dto/ai.dto';
 import { AppException } from '../../common/errors/app.exception';
 import { localDateString, parseDateOnly } from '../../common/utils/date.util';
-import { confidenceLabel } from '../../common/utils/nutrition.util';
+import { atwaterWarning, confidenceLabel } from '../../common/utils/nutrition.util';
+import { matchFoodToCatalog } from '../../common/utils/food-match.util';
 
 @Injectable()
 export class AiService {
@@ -48,25 +49,57 @@ export class AiService {
     return { used: row.count + 1, quota, remaining: quota - row.count - 1 };
   }
 
-  normalize(raw: GeminiFoodResult) {
+  async normalize(
+    raw: GeminiFoodResult,
+    catalog?: Array<{
+      name: string;
+      aliases?: string[];
+      calories: number;
+      proteinG: number;
+      carbsG: number;
+      fatG: number;
+      portionUnit?: string;
+    }>,
+  ) {
     const items = (raw.detected_items ?? [])
       .filter((i) => i.name?.trim() && i.estimated_calories >= 0)
       .map((i) => {
         const conf = Math.min(1, Math.max(0, Number(i.confidence) || 0));
-        const calories = Math.max(0, Math.round(Number(i.estimated_calories) || 0));
+        let calories = Math.max(0, Math.round(Number(i.estimated_calories) || 0));
+        let protein_g = Math.max(0, Number(i.macros?.protein_g) || 0);
+        let carbs_g = Math.max(0, Number(i.macros?.carbs_g) || 0);
+        let fat_g = Math.max(0, Number(i.macros?.fat_g) || 0);
+        let portion_unit = i.estimated_portion?.unit || 'serving';
+        let number_source: 'ai' | 'catalog' = 'ai';
+        const assumptions = [...(i.assumptions ?? [])];
+
+        if (catalog?.length) {
+          const hit = matchFoodToCatalog(i.name, catalog, 0.6);
+          if (hit && hit.score >= 0.65) {
+            calories = hit.item.calories;
+            protein_g = hit.item.proteinG;
+            carbs_g = hit.item.carbsG;
+            fat_g = hit.item.fatG;
+            if (hit.item.portionUnit) portion_unit = hit.item.portionUnit;
+            number_source = 'catalog';
+            assumptions.push(`Angka dari katalog (${hit.item.name}, cocok ${Math.round(hit.score * 100)}%).`);
+          }
+        }
+
         return {
           name: i.name.trim(),
           local_name: i.local_name ?? null,
           portion_amount: Math.max(0.01, Number(i.estimated_portion?.amount) || 1),
-          portion_unit: i.estimated_portion?.unit || 'serving',
+          portion_unit,
           calories,
-          protein_g: Math.max(0, Number(i.macros?.protein_g) || 0),
-          carbs_g: Math.max(0, Number(i.macros?.carbs_g) || 0),
-          fat_g: Math.max(0, Number(i.macros?.fat_g) || 0),
+          protein_g,
+          carbs_g,
+          fat_g,
           fiber_g: Math.max(0, Number(i.macros?.fiber_g) || 0),
           confidence: conf,
           confidence_label: confidenceLabel(conf),
-          assumptions: i.assumptions ?? [],
+          assumptions,
+          number_source,
         };
       });
 
@@ -79,10 +112,14 @@ export class AiService {
     }
 
     const recalcTotal = items.reduce((s, i) => s + i.calories, 0);
+    const proteinSum = items.reduce((s, i) => s + i.protein_g, 0);
+    const carbsSum = items.reduce((s, i) => s + i.carbs_g, 0);
+    const fatSum = items.reduce((s, i) => s + i.fat_g, 0);
     const overall = Math.min(
       1,
       Math.max(0, Number(raw.overall_confidence) || items.reduce((s, i) => s + i.confidence, 0) / items.length),
     );
+    const atw = atwaterWarning(recalcTotal, proteinSum, carbsSum, fatSum);
 
     return {
       items,
@@ -90,12 +127,17 @@ export class AiService {
       overall_confidence: overall,
       overall_confidence_label: confidenceLabel(overall),
       image_quality: raw.image_quality ?? 'usable',
-      needs_user_input: raw.needs_user_input ?? true,
+      needs_user_input: (raw.needs_user_input ?? true) || overall < 0.55,
       follow_up_questions: raw.follow_up_questions ?? [],
+      require_review: overall < 0.55,
       warnings: [
         ...(raw.warnings ?? []),
         ...(Math.abs((raw.total_estimated_calories ?? 0) - recalcTotal) > 50
           ? ['Total kalori dihitung ulang dari item.']
+          : []),
+        ...(atw ? [atw] : []),
+        ...(items.some((i) => i.number_source === 'catalog')
+          ? ['Sebagian angka diganti dari katalog makanan (bukan estimasi murni AI).']
           : []),
       ],
     };
@@ -142,7 +184,20 @@ export class AiService {
         imageBase64,
         mimeType,
       });
-      const normalized = this.normalize(raw);
+      const refs = await this.prisma.foodReference.findMany({
+        where: { active: true },
+        take: 500,
+      });
+      const catalog = refs.map((r) => ({
+        name: r.name,
+        aliases: r.aliases,
+        calories: r.calories,
+        proteinG: Number(r.proteinG),
+        carbsG: Number(r.carbsG),
+        fatG: Number(r.fatG),
+        portionUnit: r.portionUnit,
+      }));
+      const normalized = await this.normalize(raw, catalog);
       const updated = await this.prisma.aiAnalysisRun.update({
         where: { id: run.id },
         data: {
@@ -202,7 +257,20 @@ export class AiService {
     try {
       const imageUrl = this.media.signedDeliveryUrl(run.cloudinaryPublicId) ?? undefined;
       const raw = await this.gemini.analyzeImage({ imageUrl });
-      const normalized = this.normalize(raw);
+      const refs2 = await this.prisma.foodReference.findMany({
+        where: { active: true },
+        take: 500,
+      });
+      const catalog2 = refs2.map((r) => ({
+        name: r.name,
+        aliases: r.aliases,
+        calories: r.calories,
+        proteinG: Number(r.proteinG),
+        carbsG: Number(r.carbsG),
+        fatG: Number(r.fatG),
+        portionUnit: r.portionUnit,
+      }));
+      const normalized = await this.normalize(raw, catalog2);
       const updated = await this.prisma.aiAnalysisRun.update({
         where: { id },
         data: {

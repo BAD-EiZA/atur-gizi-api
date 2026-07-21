@@ -71,6 +71,23 @@ enum Intensity {
   high
 }
 
+enum ActivitySource {
+  manual
+  estimate
+  device
+}
+
+enum CalorieBudgetMode {
+  intake_only
+  eat_back
+}
+
+enum BiologicalSex {
+  male
+  female
+  unspecified
+}
+
 model AppUser {
   id           String     @id @default(uuid()) @db.Uuid
   kindeUserId  String     @unique @map("kinde_user_id")
@@ -86,6 +103,7 @@ model AppUser {
   dailyTargets    DailyTarget[]
   foodLogs        FoodLog[]
   activityLogs    ActivityLog[]
+  weightLogs      WeightLog[]
   aiAnalysisRuns  AiAnalysisRun[]
   auditEvents     AuditEvent[]
   idempotencyKeys IdempotencyKey[]
@@ -135,6 +153,7 @@ model UserProfile {
   dateOfBirth         DateTime?        @map("date_of_birth") @db.Date
   heightCm            Decimal?         @map("height_cm") @db.Decimal(6, 2)
   currentWeightKg     Decimal?         @map("current_weight_kg") @db.Decimal(6, 2)
+  sex                 BiologicalSex    @default(unspecified)
   metabolicFormula    MetabolicFormula @default(manual) @map("metabolic_formula")
   activityLevel       ActivityLevel?   @map("activity_level")
   fitnessGoal         FitnessGoal?     @map("fitness_goal")
@@ -150,17 +169,52 @@ model UserProfile {
 }
 
 model UserSettings {
-  id               String     @id @default(uuid()) @db.Uuid
-  userId           String     @unique @map("user_id") @db.Uuid
-  timezone         String     @default("Asia/Jakarta")
-  unitSystem       UnitSystem @default(metric) @map("unit_system")
-  locale           String     @default("id-ID")
-  retainFoodPhotos Boolean    @default(false) @map("retain_food_photos")
-  analyticsConsent Boolean    @default(false) @map("analytics_consent")
+  id                String            @id @default(uuid()) @db.Uuid
+  userId            String            @unique @map("user_id") @db.Uuid
+  timezone          String            @default("Asia/Jakarta")
+  unitSystem        UnitSystem        @default(metric) @map("unit_system")
+  locale            String            @default("id-ID")
+  retainFoodPhotos  Boolean           @default(false) @map("retain_food_photos")
+  analyticsConsent  Boolean           @default(false) @map("analytics_consent")
+  calorieBudgetMode CalorieBudgetMode @default(intake_only) @map("calorie_budget_mode")
 
   user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("user_settings")
+}
+
+model WeightLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  loggedAt  DateTime @map("logged_at") @db.Timestamptz
+  weightKg  Decimal  @map("weight_kg") @db.Decimal(6, 2)
+  note      String?
+  source    String   @default("manual")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, loggedAt(sort: Desc)])
+  @@map("weight_logs")
+}
+
+model FoodReference {
+  id             String   @id @default(uuid()) @db.Uuid
+  slug           String   @unique
+  name           String
+  aliases        String[] @default([])
+  portionAmount  Decimal  @default(1) @map("portion_amount") @db.Decimal(8, 2)
+  portionUnit    String   @default("porsi") @map("portion_unit")
+  calories       Int
+  proteinG       Decimal  @map("protein_g") @db.Decimal(8, 2)
+  carbsG         Decimal  @map("carbs_g") @db.Decimal(8, 2)
+  fatG           Decimal  @map("fat_g") @db.Decimal(8, 2)
+  active         Boolean  @default(true)
+  source         String   @default("catalog_id")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([name])
+  @@map("food_references")
 }
 
 model DailyTarget {
@@ -171,6 +225,9 @@ model DailyTarget {
   bmrKcal            Int?         @map("bmr_kcal")
   tdeeKcal           Int?         @map("tdee_kcal")
   calorieTarget      Int          @map("calorie_target")
+  proteinTargetG     Decimal?     @map("protein_target_g") @db.Decimal(8, 2)
+  carbsTargetG       Decimal?     @map("carbs_target_g") @db.Decimal(8, 2)
+  fatTargetG         Decimal?     @map("fat_target_g") @db.Decimal(8, 2)
   goal               FitnessGoal
   calculationMethod  String       @map("calculation_method")
   calculationInputs  Json         @map("calculation_inputs")
@@ -245,23 +302,32 @@ model ActivityType {
 }
 
 model ActivityLog {
-  id                 String     @id @default(uuid()) @db.Uuid
-  userId             String     @map("user_id") @db.Uuid
-  activityTypeId     String?    @map("activity_type_id") @db.Uuid
-  customName         String?    @map("custom_name")
-  logDate            DateTime   @map("log_date") @db.Date
-  startedAt          DateTime?  @map("started_at") @db.Timestamptz
-  durationMinutes    Int        @map("duration_minutes")
-  intensity          Intensity  @default(moderate)
-  metValue           Decimal    @map("met_value") @db.Decimal(5, 2)
-  weightSnapshotKg   Decimal    @map("weight_snapshot_kg") @db.Decimal(6, 2)
-  calculatedCalories Int        @map("calculated_calories")
-  caloriesBurned     Int        @map("calories_burned")
-  formulaVersion     String     @map("formula_version")
+  id                 String         @id @default(uuid()) @db.Uuid
+  userId             String         @map("user_id") @db.Uuid
+  activityTypeId     String?        @map("activity_type_id") @db.Uuid
+  customName         String?        @map("custom_name")
+  logDate            DateTime       @map("log_date") @db.Date
+  startedAt          DateTime?      @map("started_at") @db.Timestamptz
+  durationMinutes    Int            @map("duration_minutes")
+  intensity          Intensity      @default(moderate)
+  metValue           Decimal        @map("met_value") @db.Decimal(5, 2)
+  weightSnapshotKg   Decimal        @map("weight_snapshot_kg") @db.Decimal(6, 2)
+  calculatedCalories Int            @map("calculated_calories")
+  caloriesBurned     Int            @map("calories_burned")
+  formulaVersion     String         @map("formula_version")
   notes              String?
-  createdAt          DateTime   @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt          DateTime   @updatedAt @map("updated_at") @db.Timestamptz
-  deletedAt          DateTime?  @map("deleted_at") @db.Timestamptz
+  distanceM          Decimal?       @map("distance_m") @db.Decimal(10, 2)
+  rpe                Int?
+  avgHr              Int?           @map("avg_hr")
+  sets               Int?
+  reps               Int?
+  loadKg             Decimal?       @map("load_kg") @db.Decimal(6, 2)
+  source             ActivitySource @default(estimate)
+  deviceCalories     Int?           @map("device_calories")
+  metSource          String?        @map("met_source")
+  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime       @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt          DateTime?      @map("deleted_at") @db.Timestamptz
 
   user         AppUser       @relation(fields: [userId], references: [id], onDelete: Cascade)
   activityType ActivityType? @relation(fields: [activityTypeId], references: [id])
@@ -381,6 +447,9 @@ model MealPlan {
   mealType    MealType @map("meal_type")
   items       Json
   totalCalories Int    @map("total_calories")
+  proteinG    Decimal? @map("protein_g") @db.Decimal(8, 2)
+  carbsG      Decimal? @map("carbs_g") @db.Decimal(8, 2)
+  fatG        Decimal? @map("fat_g") @db.Decimal(8, 2)
   notes       String?
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
 

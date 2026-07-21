@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { localDateString, parseDateOnly } from '../../common/utils/date.util';
 import { motivationalMessage } from '../../common/utils/motivation.util';
+import { computeBudget, type CalorieBudgetMode } from '../../common/utils/nutrition.util';
 
 @Injectable()
 export class DashboardService {
@@ -25,39 +26,60 @@ export class DashboardService {
     const foodLogs = await this.prisma.foodLog.findMany({
       where: { userId, logDate, deletedAt: null },
       orderBy: { consumedAt: 'desc' },
-      take: 10,
-      include: { items: true },
     });
     const activityLogs = await this.prisma.activityLog.findMany({
       where: { userId, logDate, deletedAt: null },
       orderBy: { startedAt: 'desc' },
-      take: 10,
       include: { activityType: true },
     });
+    const recentFood = foodLogs.slice(0, 10);
+    const recentActivity = activityLogs.slice(0, 10);
 
     const consumed = foodLogs.reduce((s, f) => s + f.totalCalories, 0);
+    const proteinG = foodLogs.reduce((s, f) => s + (f.proteinG != null ? Number(f.proteinG) : 0), 0);
+    const carbsG = foodLogs.reduce((s, f) => s + (f.carbsG != null ? Number(f.carbsG) : 0), 0);
+    const fatG = foodLogs.reduce((s, f) => s + (f.fatG != null ? Number(f.fatG) : 0), 0);
     const burned = activityLogs.reduce((s, a) => s + a.caloriesBurned, 0);
     const duration = activityLogs.reduce((s, a) => s + a.durationMinutes, 0);
     const intakeTarget = target?.calorieTarget ?? 0;
-    const net = consumed - burned;
-    const remaining = intakeTarget - net;
-    const progressPct = intakeTarget > 0 ? Math.round((net / intakeTarget) * 100) : 0;
+    const budgetMode: CalorieBudgetMode =
+      settings?.calorieBudgetMode === 'eat_back' ? 'eat_back' : 'intake_only';
+    const budget = computeBudget({
+      mode: budgetMode,
+      intakeTarget,
+      consumed,
+      burned,
+    });
 
     const message = motivationalMessage({
       foodLogCount: foodLogs.length,
-      progressPct,
+      progressPct: budget.progress_pct,
       hasActivity: activityLogs.length > 0,
     });
+
+    const proteinTarget =
+      target?.proteinTargetG != null ? Number(target.proteinTargetG) : null;
+    const carbsTarget = target?.carbsTargetG != null ? Number(target.carbsTargetG) : null;
+    const fatTarget = target?.fatTargetG != null ? Number(target.fatTargetG) : null;
 
     return {
       date: logDateStr,
       timezone: tz,
       intake_target: intakeTarget,
       consumed_calories: consumed,
+      consumed_protein_g: Math.round(proteinG * 10) / 10,
+      consumed_carbs_g: Math.round(carbsG * 10) / 10,
+      consumed_fat_g: Math.round(fatG * 10) / 10,
+      protein_target_g: proteinTarget,
+      carbs_target_g: carbsTarget,
+      fat_target_g: fatTarget,
       burned_calories: burned,
-      net_calories: net,
-      remaining_calories: remaining,
-      progress_pct: progressPct,
+      net_calories: budget.net_calories,
+      remaining_calories: budget.remaining_calories,
+      remaining_intake: budget.remaining_intake,
+      remaining_net: budget.remaining_net,
+      budget_mode: budget.budget_mode,
+      progress_pct: budget.progress_pct,
       food_log_count: foodLogs.length,
       activity_duration_minutes: duration,
       motivational_message: message,
@@ -69,14 +91,17 @@ export class DashboardService {
             goal: target.goal,
           }
         : null,
-      recent_food: foodLogs.map((f) => ({
+      recent_food: recentFood.map((f) => ({
         id: f.id,
         title: f.title,
         meal_type: f.mealType,
         total_calories: f.totalCalories,
+        protein_g: f.proteinG != null ? Number(f.proteinG) : null,
+        carbs_g: f.carbsG != null ? Number(f.carbsG) : null,
+        fat_g: f.fatG != null ? Number(f.fatG) : null,
         consumed_at: f.consumedAt.toISOString(),
       })),
-      recent_activity: activityLogs.map((a) => ({
+      recent_activity: recentActivity.map((a) => ({
         id: a.id,
         name: a.activityType?.name ?? a.customName ?? 'Aktivitas',
         duration_minutes: a.durationMinutes,
@@ -108,6 +133,9 @@ export class DashboardService {
           title: string;
           calories: number;
           meal_type: string;
+          protein_g: number | null;
+          carbs_g: number | null;
+          fat_g: number | null;
         }
       | {
           kind: 'activity';
@@ -129,6 +157,9 @@ export class DashboardService {
           title: f.title,
           calories: f.totalCalories,
           meal_type: f.mealType,
+          protein_g: f.proteinG != null ? Number(f.proteinG) : null,
+          carbs_g: f.carbsG != null ? Number(f.carbsG) : null,
+          fat_g: f.fatG != null ? Number(f.fatG) : null,
         }),
       ),
       ...activities.map(
