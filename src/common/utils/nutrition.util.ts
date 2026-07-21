@@ -166,14 +166,50 @@ export function metFromHeartRate(input: {
   if (!(hr >= 60 && hr <= 220) || !(input.weightKg > 0) || !(input.durationMinutes > 0)) {
     return null;
   }
-  // compact estimate kcal total (gender-neutral blend)
-  const kcalPerMin =
-    (-55.0969 + 0.6309 * hr + 0.1988 * input.weightKg + 0.2017 * (input.ageYears || 30)) / 4.184;
+  // Keytel et al. simplified: male uses higher HR coefficient
+  const isMale = input.sexFactor !== 'b';
+  const kcalPerMin = isMale
+    ? (-55.0969 + 0.6309 * hr + 0.1988 * input.weightKg + 0.2017 * (input.ageYears || 30)) / 4.184
+    : (-20.4022 + 0.4472 * hr - 0.1263 * input.weightKg + 0.074 * (input.ageYears || 30)) / 4.184;
   const total = Math.max(0, kcalPerMin) * input.durationMinutes;
   // invert ACSM: kcal = MET * 3.5 * kg * min / 200  →  MET = kcal * 200 / (3.5 * kg * min)
   const met = (total * 200) / (3.5 * input.weightKg * input.durationMinutes);
   if (!Number.isFinite(met) || met < 1) return null;
   return clampMet(met);
+}
+
+/**
+ * Adaptive TDEE from weight trend + average intake.
+ * observed_delta_kg over days → expenditure ≈ intake - delta*7700/days
+ */
+export function estimateAdaptiveTdee(input: {
+  formulaTdee: number;
+  avgIntakeKcal: number;
+  weightDeltaKg: number;
+  windowDays: number;
+  blendFormula?: number;
+  clampAdj?: number;
+}): {
+  adaptiveTdee: number;
+  suggestedTarget: number;
+  adjustmentKcal: number;
+  weightSlopeKgWk: number;
+} {
+  const days = Math.max(7, input.windowDays);
+  const blend = input.blendFormula ?? 0.7;
+  const clamp = input.clampAdj ?? 250;
+  const observedExp =
+    input.avgIntakeKcal - (input.weightDeltaKg * 7700) / days;
+  const adaptive =
+    blend * input.formulaTdee + (1 - blend) * Math.max(1000, observedExp);
+  const adj = Math.max(-clamp, Math.min(clamp, adaptive - input.formulaTdee));
+  const adaptiveTdee = Math.round(input.formulaTdee + adj);
+  return {
+    adaptiveTdee,
+    suggestedTarget: adaptiveTdee,
+    adjustmentKcal: Math.round(adj),
+    weightSlopeKgWk: Math.round((input.weightDeltaKg / days) * 7 * 1000) / 1000,
+  };
 }
 
 export function calcDeviceOrMetCalories(input: {

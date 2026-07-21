@@ -9,7 +9,13 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
-import { ActivityLevel, FitnessGoal, MetabolicFormula, UnitSystem } from '@prisma/client';
+import {
+  ActivityLevel,
+  BiologicalSex,
+  FitnessGoal,
+  MetabolicFormula,
+  UnitSystem,
+} from '@prisma/client';
 
 export class PreviewTargetDto {
   @IsDateString()
@@ -24,6 +30,10 @@ export class PreviewTargetDto {
   @Min(20)
   @Max(400)
   weightKg!: number;
+
+  @IsOptional()
+  @IsEnum(BiologicalSex)
+  sex?: BiologicalSex;
 
   @IsEnum(MetabolicFormula)
   metabolicFormula!: MetabolicFormula;

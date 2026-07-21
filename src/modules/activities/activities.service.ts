@@ -226,6 +226,13 @@ export class ActivitiesService {
     }
   }
 
+  private async sexFactor(userId: string): Promise<'a' | 'b' | undefined> {
+    const p = await this.prisma.userProfile.findUnique({ where: { userId } });
+    if (p?.sex === 'male' || p?.metabolicFormula === 'mifflin_a') return 'a';
+    if (p?.sex === 'female' || p?.metabolicFormula === 'mifflin_b') return 'b';
+    return undefined;
+  }
+
   private resolveMetFor(input: {
     defaultMet?: number | null;
     metOverride?: number | null;
@@ -237,6 +244,7 @@ export class ActivitiesService {
     weightKg: number;
     ageYears: number;
     preferHr?: boolean;
+    sexFactor?: 'a' | 'b';
   }) {
     let paceMet: number | null = null;
     if (input.distanceM != null && input.distanceM > 0) {
@@ -253,6 +261,7 @@ export class ActivitiesService {
         weightKg: input.weightKg,
         ageYears: input.ageYears,
         durationMinutes: input.durationMinutes,
+        sexFactor: input.sexFactor,
       });
     }
     return resolveActivityMet({
@@ -261,7 +270,7 @@ export class ActivitiesService {
       intensity: (input.intensity ?? 'moderate') as ActivityIntensity,
       paceMet,
       hrMet,
-      preferHr: input.preferHr && !input.metOverride && !paceMet,
+      preferHr: Boolean(input.preferHr) && !input.metOverride && !paceMet,
     });
   }
 
@@ -287,12 +296,14 @@ export class ActivitiesService {
     }
     const weight = await this.weightKg(userId, dto.weightKg);
     const age = await this.ageYears(userId);
+    const sex = await this.sexFactor(userId);
     const resolved = this.resolveMetFor({
       defaultMet,
       metOverride: dto.metValue,
       intensity: dto.intensity ?? Intensity.moderate,
       distanceM: dto.distanceM,
       durationMinutes: dto.durationMinutes,
+      sexFactor: sex,
       slug,
       avgHr: dto.avgHr,
       weightKg: weight,
@@ -349,6 +360,7 @@ export class ActivitiesService {
 
     const weight = await this.weightKg(userId);
     const age = await this.ageYears(userId);
+    const sex = await this.sexFactor(userId);
     const intensity = dto.intensity ?? Intensity.moderate;
     const resolved = this.resolveMetFor({
       defaultMet,
@@ -360,6 +372,7 @@ export class ActivitiesService {
       avgHr: dto.avgHr,
       weightKg: weight,
       ageYears: age,
+      sexFactor: sex,
       preferHr: Boolean(dto.avgHr) && !dto.metValue && !(dto.distanceM && dto.distanceM > 0),
     });
 
@@ -485,6 +498,15 @@ export class ActivitiesService {
     const avgHr = dto.avgHr !== undefined ? dto.avgHr : existing.avgHr;
     const weight = Number(existing.weightSnapshotKg);
     const age = await this.ageYears(userId);
+    const sex = await this.sexFactor(userId);
+    const sets = dto.sets !== undefined ? dto.sets : existing.sets;
+    const reps = dto.reps !== undefined ? dto.reps : existing.reps;
+    const loadKg =
+      dto.loadKg !== undefined
+        ? dto.loadKg
+        : existing.loadKg != null
+          ? Number(existing.loadKg)
+          : null;
 
     const resolved = this.resolveMetFor({
       defaultMet: existing.activityType ? Number(existing.activityType.defaultMet) : Number(existing.metValue),
@@ -496,6 +518,7 @@ export class ActivitiesService {
       avgHr,
       weightKg: weight,
       ageYears: age,
+      sexFactor: sex,
       preferHr: Boolean(avgHr) && dto.metValue == null && !(distanceM && distanceM > 0),
     });
 
@@ -505,12 +528,28 @@ export class ActivitiesService {
       dto.intensity != null ||
       dto.distanceM !== undefined ||
       dto.avgHr !== undefined ||
-      dto.metValue != null;
+      dto.metValue != null ||
+      dto.sets !== undefined ||
+      dto.reps !== undefined ||
+      dto.loadKg !== undefined;
     const met = effortChanged ? resolved.met : Number(existing.metValue);
     const metSource = effortChanged ? resolved.source : existing.metSource;
 
-    const calculated = calcActivityCalories(met, weight, duration);
-    const burned = dto.caloriesBurned ?? calculated;
+    let calculated = calcActivityCalories(met, weight, duration);
+    if (existing.source !== 'device' && (sets || reps)) {
+      calculated = strengthVolumeCalories({
+        metCalories: calculated,
+        sets,
+        reps,
+        loadKg,
+        bodyWeightKg: weight,
+        durationMinutes: duration,
+      });
+    }
+    // preserve device kcal unless user overrides burned
+    const burned =
+      dto.caloriesBurned ??
+      (existing.deviceCalories != null ? existing.deviceCalories : calculated);
 
     const settings = await this.prisma.userSettings.findUnique({ where: { userId } });
     const tz = settings?.timezone ?? 'Asia/Jakarta';

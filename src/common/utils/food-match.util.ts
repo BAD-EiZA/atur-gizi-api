@@ -8,7 +8,48 @@ export type CatalogFood = {
   carbsG: number;
   fatG: number;
   portionUnit?: string;
+  portionAmount?: number;
+  refGrams?: number | null;
 };
+
+/** Scale catalog nutrition by AI portion vs catalog reference amount. */
+export function scaleCatalogToPortion(
+  catalog: CatalogFood,
+  aiPortionAmount: number,
+): {
+  calories: number;
+  proteinG: number;
+  carbsG: number;
+  fatG: number;
+  scale: number;
+  scaled: boolean;
+} {
+  const ref = Number(catalog.portionAmount) > 0 ? Number(catalog.portionAmount) : 1;
+  const amt = Number(aiPortionAmount) > 0 ? Number(aiPortionAmount) : 1;
+  const scale = amt / ref;
+  // only scale when ratio is meaningful (not ~1 with weird units)
+  const scaled = Math.abs(scale - 1) > 0.05 && scale > 0 && scale < 20;
+  const s = scaled ? scale : 1;
+  return {
+    calories: Math.round(catalog.calories * s),
+    proteinG: Math.round(catalog.proteinG * s * 10) / 10,
+    carbsG: Math.round(catalog.carbsG * s * 10) / 10,
+    fatG: Math.round(catalog.fatG * s * 10) / 10,
+    scale: s,
+    scaled,
+  };
+}
+
+export function foodKey(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+}
 
 function norm(s: string) {
   return s

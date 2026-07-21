@@ -5,6 +5,7 @@ import {
   computeBudget,
   computeMacroTargets,
   computeTarget,
+  estimateAdaptiveTdee,
   intensityFactor,
   kcalFromMacros,
   metFromHeartRate,
@@ -104,5 +105,16 @@ describe('nutrition util', () => {
       durationMinutes: 40,
     });
     expect(raised).toBeGreaterThanOrEqual(base);
+  });
+
+  it('adaptive TDEE blends and clamps', () => {
+    const r = estimateAdaptiveTdee({
+      formulaTdee: 2200,
+      avgIntakeKcal: 1800,
+      weightDeltaKg: -1.5,
+      windowDays: 21,
+    });
+    expect(r.adaptiveTdee).toBeGreaterThan(1800);
+    expect(Math.abs(r.adjustmentKcal)).toBeLessThanOrEqual(250);
   });
 });

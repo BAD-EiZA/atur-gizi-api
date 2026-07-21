@@ -52,4 +52,14 @@ export class UsersController {
   patchMacros(@CurrentUser() user: AuthenticatedUser, @Body() dto: PatchMacroTargetsDto) {
     return this.users.patchMacroTargets(user.appUserId, dto);
   }
+
+  @Get('me/energy-suggestion')
+  energySuggestion(@CurrentUser() user: AuthenticatedUser) {
+    return this.users.getEnergySuggestion(user.appUserId);
+  }
+
+  @Post('me/energy-suggestion/accept')
+  acceptEnergy(@CurrentUser() user: AuthenticatedUser) {
+    return this.users.acceptEnergySuggestion(user.appUserId);
+  }
 }

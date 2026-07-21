@@ -294,26 +294,53 @@ export class FeaturesService {
           product_name?: string;
           brands?: string;
           serving_size?: string;
+          serving_quantity?: number | string;
           nutriments?: Record<string, number | undefined>;
         };
       };
       if (body.status !== 1 || !body.product) return null;
       const n = body.product.nutriments ?? {};
-      // prefer per serving, else 100g
-      const kcal =
-        n['energy-kcal_serving'] ??
+      const kcal100 =
         n['energy-kcal_100g'] ??
-        (n['energy_serving'] != null ? Number(n['energy_serving']) / 4.184 : null) ??
         (n['energy_100g'] != null ? Number(n['energy_100g']) / 4.184 : null);
-      if (kcal == null || !Number.isFinite(Number(kcal))) return null;
+      const kcalServ =
+        n['energy-kcal_serving'] ??
+        (n['energy_serving'] != null ? Number(n['energy_serving']) / 4.184 : null);
+      const hasServing = kcalServ != null && Number.isFinite(Number(kcalServ));
+      const has100 = kcal100 != null && Number.isFinite(Number(kcal100));
+      if (!hasServing && !has100) return null;
+      // Prefer serving when complete; else 100g — never mix bases
+      const basis: 'serving' | '100g' = hasServing ? 'serving' : '100g';
+      const calories = Math.round(Number(basis === 'serving' ? kcalServ : kcal100));
+      const proteinG =
+        basis === 'serving'
+          ? Number(n.proteins_serving ?? 0) || 0
+          : Number(n.proteins_100g ?? 0) || 0;
+      const carbsG =
+        basis === 'serving'
+          ? Number(n.carbohydrates_serving ?? 0) || 0
+          : Number(n.carbohydrates_100g ?? 0) || 0;
+      const fatG =
+        basis === 'serving' ? Number(n.fat_serving ?? 0) || 0 : Number(n.fat_100g ?? 0) || 0;
+      const sq = body.product.serving_quantity;
       return {
         name: body.product.product_name || `Produk ${barcode}`,
         brand: body.product.brands || null,
         servingSize: body.product.serving_size || null,
-        calories: Math.round(Number(kcal)),
-        proteinG: Number(n.proteins_serving ?? n.proteins_100g ?? 0) || 0,
-        carbsG: Number(n.carbohydrates_serving ?? n.carbohydrates_100g ?? 0) || 0,
-        fatG: Number(n.fat_serving ?? n.fat_100g ?? 0) || 0,
+        calories,
+        proteinG,
+        carbsG,
+        fatG,
+        nutrientBasis: basis,
+        servingQuantityG: sq != null && Number.isFinite(Number(sq)) ? Number(sq) : null,
+        calories100g: has100 ? Math.round(Number(kcal100)) : null,
+        caloriesServing: hasServing ? Math.round(Number(kcalServ)) : null,
+        protein100g: Number(n.proteins_100g ?? 0) || null,
+        carbs100g: Number(n.carbohydrates_100g ?? 0) || null,
+        fat100g: Number(n.fat_100g ?? 0) || null,
+        proteinServing: Number(n.proteins_serving ?? 0) || null,
+        carbsServing: Number(n.carbohydrates_serving ?? 0) || null,
+        fatServing: Number(n.fat_serving ?? 0) || null,
         source: 'open_food_facts',
       };
     } catch {
@@ -323,11 +350,15 @@ export class FeaturesService {
 
   async lookupBarcode(userId: string, barcode: string) {
     let product = await this.prisma.barcodeProduct.findUnique({ where: { barcode } });
-    if (!product) {
+    const stale =
+      product?.fetchedAt != null &&
+      Date.now() - product.fetchedAt.getTime() > 30 * 24 * 60 * 60 * 1000;
+    if (!product || (product.source === 'open_food_facts' && stale)) {
       const off = await this.fetchOpenFoodFacts(barcode);
       if (off) {
-        product = await this.prisma.barcodeProduct.create({
-          data: {
+        product = await this.prisma.barcodeProduct.upsert({
+          where: { barcode },
+          create: {
             barcode,
             name: off.name,
             brand: off.brand,
@@ -336,7 +367,39 @@ export class FeaturesService {
             proteinG: off.proteinG,
             carbsG: off.carbsG,
             fatG: off.fatG,
+            nutrientBasis: off.nutrientBasis,
+            servingQuantityG: off.servingQuantityG,
+            calories100g: off.calories100g,
+            caloriesServing: off.caloriesServing,
+            protein100g: off.protein100g,
+            carbs100g: off.carbs100g,
+            fat100g: off.fat100g,
+            proteinServing: off.proteinServing,
+            carbsServing: off.carbsServing,
+            fatServing: off.fatServing,
             source: off.source,
+            fetchedAt: new Date(),
+          },
+          update: {
+            name: off.name,
+            brand: off.brand,
+            servingSize: off.servingSize,
+            calories: off.calories,
+            proteinG: off.proteinG,
+            carbsG: off.carbsG,
+            fatG: off.fatG,
+            nutrientBasis: off.nutrientBasis,
+            servingQuantityG: off.servingQuantityG,
+            calories100g: off.calories100g,
+            caloriesServing: off.caloriesServing,
+            protein100g: off.protein100g,
+            carbs100g: off.carbs100g,
+            fat100g: off.fat100g,
+            proteinServing: off.proteinServing,
+            carbsServing: off.carbsServing,
+            fatServing: off.fatServing,
+            source: off.source,
+            fetchedAt: new Date(),
           },
         });
       }
@@ -408,6 +471,17 @@ export class FeaturesService {
       carbs_g: product.carbsG != null ? Number(product.carbsG) : null,
       fat_g: product.fatG != null ? Number(product.fatG) : null,
       serving_size: product.servingSize,
+      nutrient_basis: product.nutrientBasis ?? 'serving',
+      serving_quantity_g:
+        product.servingQuantityG != null ? Number(product.servingQuantityG) : null,
+      calories_100g: product.calories100g,
+      calories_serving: product.caloriesServing,
+      protein_100g: product.protein100g != null ? Number(product.protein100g) : null,
+      carbs_100g: product.carbs100g != null ? Number(product.carbs100g) : null,
+      fat_100g: product.fat100g != null ? Number(product.fat100g) : null,
+      protein_serving: product.proteinServing != null ? Number(product.proteinServing) : null,
+      carbs_serving: product.carbsServing != null ? Number(product.carbsServing) : null,
+      fat_serving: product.fatServing != null ? Number(product.fatServing) : null,
     };
   }
 

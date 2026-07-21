@@ -104,6 +104,8 @@ model AppUser {
   foodLogs        FoodLog[]
   activityLogs    ActivityLog[]
   weightLogs      WeightLog[]
+  aiPortionBiases AiPortionBias[]
+  energyState     UserEnergyState?
   aiAnalysisRuns  AiAnalysisRun[]
   auditEvents     AuditEvent[]
   idempotencyKeys IdempotencyKey[]
@@ -205,6 +207,8 @@ model FoodReference {
   aliases        String[] @default([])
   portionAmount  Decimal  @default(1) @map("portion_amount") @db.Decimal(8, 2)
   portionUnit    String   @default("porsi") @map("portion_unit")
+  refGrams       Decimal? @map("ref_grams") @db.Decimal(8, 2)
+  caloriesPer100g Int?    @map("calories_per_100g")
   calories       Int
   proteinG       Decimal  @map("protein_g") @db.Decimal(8, 2)
   carbsG         Decimal  @map("carbs_g") @db.Decimal(8, 2)
@@ -215,6 +219,41 @@ model FoodReference {
 
   @@index([name])
   @@map("food_references")
+}
+
+model AiPortionBias {
+  id                String   @id @default(uuid()) @db.Uuid
+  userId            String   @map("user_id") @db.Uuid
+  foodKey           String   @map("food_key")
+  sampleCount       Int      @default(0) @map("sample_count")
+  medianKcalRatio   Decimal  @map("median_kcal_ratio") @db.Decimal(6, 3)
+  medianAmountRatio Decimal? @map("median_amount_ratio") @db.Decimal(6, 3)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, foodKey])
+  @@index([userId])
+  @@map("ai_portion_biases")
+}
+
+model UserEnergyState {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String   @unique @map("user_id") @db.Uuid
+  adaptiveTdeeKcal Int?     @map("adaptive_tdee_kcal")
+  suggestedTarget  Int?     @map("suggested_target")
+  adjustmentKcal   Int?     @map("adjustment_kcal")
+  method           String?  @default("weight_trend_v1")
+  windowDays       Int?     @map("window_days")
+  avgIntakeKcal    Int?     @map("avg_intake_kcal")
+  weightSlopeKgWk  Decimal? @map("weight_slope_kg_wk") @db.Decimal(6, 3)
+  inputs           Json?
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_energy_states")
 }
 
 model DailyTarget {
@@ -460,17 +499,28 @@ model MealPlan {
 }
 
 model BarcodeProduct {
-  id          String   @id @default(uuid()) @db.Uuid
-  barcode     String   @unique
-  name        String
-  brand       String?
-  servingSize String?  @map("serving_size")
-  calories    Int
-  proteinG    Decimal? @map("protein_g") @db.Decimal(8, 2)
-  carbsG      Decimal? @map("carbs_g") @db.Decimal(8, 2)
-  fatG        Decimal? @map("fat_g") @db.Decimal(8, 2)
-  source      String   @default("manual")
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  id               String    @id @default(uuid()) @db.Uuid
+  barcode          String    @unique
+  name             String
+  brand            String?
+  servingSize      String?   @map("serving_size")
+  calories         Int
+  proteinG         Decimal?  @map("protein_g") @db.Decimal(8, 2)
+  carbsG           Decimal?  @map("carbs_g") @db.Decimal(8, 2)
+  fatG             Decimal?  @map("fat_g") @db.Decimal(8, 2)
+  nutrientBasis    String?   @map("nutrient_basis") // serving | 100g
+  servingQuantityG Decimal?  @map("serving_quantity_g") @db.Decimal(8, 2)
+  calories100g     Int?      @map("calories_100g")
+  caloriesServing  Int?      @map("calories_serving")
+  protein100g      Decimal?  @map("protein_100g") @db.Decimal(8, 2)
+  carbs100g        Decimal?  @map("carbs_100g") @db.Decimal(8, 2)
+  fat100g          Decimal?  @map("fat_100g") @db.Decimal(8, 2)
+  proteinServing   Decimal?  @map("protein_serving") @db.Decimal(8, 2)
+  carbsServing     Decimal?  @map("carbs_serving") @db.Decimal(8, 2)
+  fatServing       Decimal?  @map("fat_serving") @db.Decimal(8, 2)
+  source           String    @default("manual")
+  fetchedAt        DateTime? @map("fetched_at") @db.Timestamptz
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz
 
   scans BarcodeScan[]
 

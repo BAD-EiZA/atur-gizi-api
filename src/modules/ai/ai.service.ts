@@ -8,7 +8,11 @@ import { ConfirmAnalysisDto, StartAnalysisDto } from './dto/ai.dto';
 import { AppException } from '../../common/errors/app.exception';
 import { localDateString, parseDateOnly } from '../../common/utils/date.util';
 import { atwaterWarning, confidenceLabel } from '../../common/utils/nutrition.util';
-import { matchFoodToCatalog } from '../../common/utils/food-match.util';
+import {
+  foodKey,
+  matchFoodToCatalog,
+  scaleCatalogToPortion,
+} from '../../common/utils/food-match.util';
 
 @Injectable()
 export class AiService {
@@ -59,7 +63,10 @@ export class AiService {
       carbsG: number;
       fatG: number;
       portionUnit?: string;
+      portionAmount?: number;
+      slug?: string;
     }>,
+    biases?: Map<string, number>,
   ) {
     const items = (raw.detected_items ?? [])
       .filter((i) => i.name?.trim() && i.estimated_calories >= 0)
@@ -69,27 +76,52 @@ export class AiService {
         let protein_g = Math.max(0, Number(i.macros?.protein_g) || 0);
         let carbs_g = Math.max(0, Number(i.macros?.carbs_g) || 0);
         let fat_g = Math.max(0, Number(i.macros?.fat_g) || 0);
+        const portion_amount = Math.max(0.01, Number(i.estimated_portion?.amount) || 1);
         let portion_unit = i.estimated_portion?.unit || 'serving';
-        let number_source: 'ai' | 'catalog' = 'ai';
+        let number_source: 'ai' | 'catalog' | 'catalog_scaled' | 'personal_bias' = 'ai';
         const assumptions = [...(i.assumptions ?? [])];
+        let personal_bias_applied: number | null = null;
 
         if (catalog?.length) {
           const hit = matchFoodToCatalog(i.name, catalog, 0.6);
           if (hit && hit.score >= 0.65) {
-            calories = hit.item.calories;
-            protein_g = hit.item.proteinG;
-            carbs_g = hit.item.carbsG;
-            fat_g = hit.item.fatG;
+            const scaled = scaleCatalogToPortion(
+              {
+                ...hit.item,
+                portionAmount: hit.item.portionAmount ?? 1,
+              },
+              portion_amount,
+            );
+            calories = scaled.calories;
+            protein_g = scaled.proteinG;
+            carbs_g = scaled.carbsG;
+            fat_g = scaled.fatG;
             if (hit.item.portionUnit) portion_unit = hit.item.portionUnit;
-            number_source = 'catalog';
-            assumptions.push(`Angka dari katalog (${hit.item.name}, cocok ${Math.round(hit.score * 100)}%).`);
+            number_source = scaled.scaled ? 'catalog_scaled' : 'catalog';
+            assumptions.push(
+              scaled.scaled
+                ? `Katalog ${hit.item.name} ×${scaled.scale.toFixed(2)} porsi (cocok ${Math.round(hit.score * 100)}%).`
+                : `Angka dari katalog (${hit.item.name}, cocok ${Math.round(hit.score * 100)}%).`,
+            );
           }
+        }
+
+        const key = foodKey(i.name);
+        const bias = biases?.get(key);
+        if (bias != null && bias > 0.5 && bias < 1.8 && Math.abs(bias - 1) > 0.08) {
+          calories = Math.round(calories * bias);
+          protein_g = Math.round(protein_g * bias * 10) / 10;
+          carbs_g = Math.round(carbs_g * bias * 10) / 10;
+          fat_g = Math.round(fat_g * bias * 10) / 10;
+          personal_bias_applied = bias;
+          number_source = 'personal_bias';
+          assumptions.push(`Disesuaikan dari koreksi Anda (×${bias.toFixed(2)}).`);
         }
 
         return {
           name: i.name.trim(),
           local_name: i.local_name ?? null,
-          portion_amount: Math.max(0.01, Number(i.estimated_portion?.amount) || 1),
+          portion_amount,
           portion_unit,
           calories,
           protein_g,
@@ -100,6 +132,7 @@ export class AiService {
           confidence_label: confidenceLabel(conf),
           assumptions,
           number_source,
+          personal_bias_applied,
         };
       });
 
@@ -120,27 +153,107 @@ export class AiService {
       Math.max(0, Number(raw.overall_confidence) || items.reduce((s, i) => s + i.confidence, 0) / items.length),
     );
     const atw = atwaterWarning(recalcTotal, proteinSum, carbsSum, fatSum);
+    const imageQuality = raw.image_quality ?? 'usable';
+    const lowItem = items.some((i) => i.confidence < 0.45);
+    const require_review = overall < 0.55 || imageQuality === 'poor' || lowItem;
 
     return {
       items,
       total_estimated_calories: recalcTotal,
       overall_confidence: overall,
       overall_confidence_label: confidenceLabel(overall),
-      image_quality: raw.image_quality ?? 'usable',
-      needs_user_input: (raw.needs_user_input ?? true) || overall < 0.55,
+      image_quality: imageQuality,
+      needs_user_input: (raw.needs_user_input ?? true) || require_review,
       follow_up_questions: raw.follow_up_questions ?? [],
-      require_review: overall < 0.55,
+      require_review,
       warnings: [
         ...(raw.warnings ?? []),
         ...(Math.abs((raw.total_estimated_calories ?? 0) - recalcTotal) > 50
           ? ['Total kalori dihitung ulang dari item.']
           : []),
         ...(atw ? [atw] : []),
-        ...(items.some((i) => i.number_source === 'catalog')
-          ? ['Sebagian angka diganti dari katalog makanan (bukan estimasi murni AI).']
+        ...(items.some((i) => i.number_source === 'catalog' || i.number_source === 'catalog_scaled')
+          ? ['Sebagian angka dari katalog (diskalakan ke porsi AI bila memungkinkan).']
+          : []),
+        ...(imageQuality === 'poor' ? ['Kualitas foto rendah — tinjau porsi dengan saksama.'] : []),
+        ...(lowItem ? ['Ada item dengan keyakinan rendah.'] : []),
+        ...(items.some((i) => i.personal_bias_applied)
+          ? ['Faktor koreksi personal diterapkan pada sebagian item.']
           : []),
       ],
     };
+  }
+
+  private async loadCatalog() {
+    const refs = await this.prisma.foodReference.findMany({
+      where: { active: true },
+      take: 800,
+    });
+    return refs.map((r) => ({
+      name: r.name,
+      aliases: r.aliases,
+      calories: r.calories,
+      proteinG: Number(r.proteinG),
+      carbsG: Number(r.carbsG),
+      fatG: Number(r.fatG),
+      portionUnit: r.portionUnit,
+      portionAmount: Number(r.portionAmount) || 1,
+      slug: r.slug,
+    }));
+  }
+
+  private async loadBiases(userId: string) {
+    const rows = await this.prisma.aiPortionBias.findMany({
+      where: { userId, sampleCount: { gte: 3 } },
+    });
+    const map = new Map<string, number>();
+    for (const r of rows) {
+      map.set(r.foodKey, Number(r.medianKcalRatio));
+    }
+    return map;
+  }
+
+  private async recordPortionBiases(
+    userId: string,
+    draftItems: Array<{ name?: string; calories?: number; portion_amount?: number }>,
+    confirmed: Array<{ name: string; calories: number; portionAmount: number }>,
+  ) {
+    for (let i = 0; i < confirmed.length; i++) {
+      const user = confirmed[i]!;
+      const draft = draftItems[i];
+      const aiKcal = Number(draft?.calories);
+      const userKcal = Number(user.calories);
+      if (!(aiKcal > 0) || !(userKcal > 0)) continue;
+      const ratio = userKcal / aiKcal;
+      if (ratio < 0.4 || ratio > 2.5) continue;
+      const key = foodKey(user.name || draft?.name || '');
+      if (!key) continue;
+      const existing = await this.prisma.aiPortionBias.findUnique({
+        where: { userId_foodKey: { userId, foodKey: key } },
+      });
+      if (!existing) {
+        await this.prisma.aiPortionBias.create({
+          data: {
+            userId,
+            foodKey: key,
+            sampleCount: 1,
+            medianKcalRatio: ratio,
+          },
+        });
+      } else {
+        const n = existing.sampleCount;
+        const prev = Number(existing.medianKcalRatio);
+        // running median approx = blend
+        const next = (prev * n + ratio) / (n + 1);
+        await this.prisma.aiPortionBias.update({
+          where: { id: existing.id },
+          data: {
+            sampleCount: n + 1,
+            medianKcalRatio: Math.round(next * 1000) / 1000,
+          },
+        });
+      }
+    }
   }
 
   async start(userId: string, dto: StartAnalysisDto) {
@@ -184,20 +297,9 @@ export class AiService {
         imageBase64,
         mimeType,
       });
-      const refs = await this.prisma.foodReference.findMany({
-        where: { active: true },
-        take: 500,
-      });
-      const catalog = refs.map((r) => ({
-        name: r.name,
-        aliases: r.aliases,
-        calories: r.calories,
-        proteinG: Number(r.proteinG),
-        carbsG: Number(r.carbsG),
-        fatG: Number(r.fatG),
-        portionUnit: r.portionUnit,
-      }));
-      const normalized = await this.normalize(raw, catalog);
+      const catalog = await this.loadCatalog();
+      const biases = await this.loadBiases(userId);
+      const normalized = await this.normalize(raw, catalog, biases);
       const updated = await this.prisma.aiAnalysisRun.update({
         where: { id: run.id },
         data: {
@@ -257,20 +359,9 @@ export class AiService {
     try {
       const imageUrl = this.media.signedDeliveryUrl(run.cloudinaryPublicId) ?? undefined;
       const raw = await this.gemini.analyzeImage({ imageUrl });
-      const refs2 = await this.prisma.foodReference.findMany({
-        where: { active: true },
-        take: 500,
-      });
-      const catalog2 = refs2.map((r) => ({
-        name: r.name,
-        aliases: r.aliases,
-        calories: r.calories,
-        proteinG: Number(r.proteinG),
-        carbsG: Number(r.carbsG),
-        fatG: Number(r.fatG),
-        portionUnit: r.portionUnit,
-      }));
-      const normalized = await this.normalize(raw, catalog2);
+      const catalog2 = await this.loadCatalog();
+      const biases2 = await this.loadBiases(userId);
+      const normalized = await this.normalize(raw, catalog2, biases2);
       const updated = await this.prisma.aiAnalysisRun.update({
         where: { id },
         data: {
@@ -322,6 +413,15 @@ export class AiService {
 
     const settings = await this.prisma.userSettings.findUnique({ where: { userId } });
     const retain = settings?.retainFoodPhotos ?? false;
+
+    const draftOut = run.normalizedOutput as {
+      items?: Array<{ name?: string; calories?: number; portion_amount?: number }>;
+    } | null;
+    try {
+      await this.recordPortionBiases(userId, draftOut?.items ?? [], dto.items);
+    } catch {
+      /* bias learning best-effort */
+    }
 
     const foodLog = await this.nutrition.create(
       userId,

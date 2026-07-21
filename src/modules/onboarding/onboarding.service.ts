@@ -68,13 +68,19 @@ export class OnboardingService {
           data: { displayName: dto.displayName },
         });
       }
+      let formula = dto.metabolicFormula;
+      if (dto.sex === 'male' && formula === 'mifflin_b') formula = 'mifflin_a';
+      if (dto.sex === 'female' && formula === 'mifflin_a') formula = 'mifflin_b';
+      if (dto.sex === 'male' && (!formula || formula === 'manual')) formula = 'mifflin_a';
+      if (dto.sex === 'female' && (!formula || formula === 'manual')) formula = 'mifflin_b';
       await tx.userProfile.update({
         where: { userId: appUserId },
         data: {
           dateOfBirth: dob,
           heightCm: dto.heightCm,
           currentWeightKg: dto.weightKg,
-          metabolicFormula: dto.metabolicFormula,
+          sex: dto.sex ?? 'unspecified',
+          metabolicFormula: formula,
           activityLevel: dto.activityLevel,
           fitnessGoal: dto.fitnessGoal,
           targetRate: dto.targetRate,

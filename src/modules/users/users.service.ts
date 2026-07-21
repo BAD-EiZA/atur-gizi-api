@@ -9,7 +9,11 @@ import {
   PatchProfileDto,
   PatchSettingsDto,
 } from './dto/profile.dto';
-import { computeMacroTargets, computeTarget } from '../../common/utils/nutrition.util';
+import {
+  computeMacroTargets,
+  computeTarget,
+  estimateAdaptiveTdee,
+} from '../../common/utils/nutrition.util';
 import { ageFromDob, localDateString, parseDateOnly } from '../../common/utils/date.util';
 import { ConfigService } from '@nestjs/config';
 import { BiologicalSex, FitnessGoal, MetabolicFormula } from '@prisma/client';
@@ -183,12 +187,163 @@ export class UsersService {
       data: { currentWeightKg: dto.weightKg },
     });
     await this.refreshTargetFromProfile(appUserId);
+    // best-effort adaptive energy suggestion
+    try {
+      await this.recomputeAdaptiveEnergy(appUserId);
+    } catch {
+      /* ignore */
+    }
     return {
       id: row.id,
       weight_kg: Number(row.weightKg),
       logged_at: row.loggedAt.toISOString(),
       note: row.note,
     };
+  }
+
+  async recomputeAdaptiveEnergy(appUserId: string) {
+    const weights = await this.prisma.weightLog.findMany({
+      where: { userId: appUserId },
+      orderBy: { loggedAt: 'asc' },
+      take: 60,
+    });
+    if (weights.length < 4) return null;
+    const first = weights[0]!;
+    const last = weights[weights.length - 1]!;
+    const days = Math.max(
+      7,
+      Math.round((last.loggedAt.getTime() - first.loggedAt.getTime()) / (86400000)),
+    );
+    if (days < 14) return null;
+
+    const from = first.loggedAt;
+    const foods = await this.prisma.foodLog.findMany({
+      where: {
+        userId: appUserId,
+        deletedAt: null,
+        logDate: { gte: parseDateOnly(from.toISOString().slice(0, 10)) },
+      },
+    });
+    const daySet = new Set(foods.map((f) => f.logDate.toISOString().slice(0, 10)));
+    if (daySet.size < 10) return null;
+
+    const totalIntake = foods.reduce((s, f) => s + f.totalCalories, 0);
+    const avgIntake = Math.round(totalIntake / daySet.size);
+    const target = await this.prisma.dailyTarget.findFirst({
+      where: { userId: appUserId, effectiveTo: null },
+      orderBy: { effectiveFrom: 'desc' },
+    });
+    const formulaTdee = target?.tdeeKcal ?? target?.calorieTarget ?? 2000;
+    const weightDelta = Number(last.weightKg) - Number(first.weightKg);
+    const est = estimateAdaptiveTdee({
+      formulaTdee,
+      avgIntakeKcal: avgIntake,
+      weightDeltaKg: weightDelta,
+      windowDays: days,
+    });
+    const suggested =
+      target?.goal === 'lose_weight'
+        ? Math.round(est.adaptiveTdee * 0.85)
+        : target?.goal === 'gain_weight'
+          ? Math.round(est.adaptiveTdee * 1.1)
+          : est.adaptiveTdee;
+
+    await this.prisma.userEnergyState.upsert({
+      where: { userId: appUserId },
+      create: {
+        userId: appUserId,
+        adaptiveTdeeKcal: est.adaptiveTdee,
+        suggestedTarget: suggested,
+        adjustmentKcal: est.adjustmentKcal,
+        method: 'weight_trend_v1',
+        windowDays: days,
+        avgIntakeKcal: avgIntake,
+        weightSlopeKgWk: est.weightSlopeKgWk,
+        inputs: {
+          formula_tdee: formulaTdee,
+          food_days: daySet.size,
+          weight_delta_kg: weightDelta,
+        },
+      },
+      update: {
+        adaptiveTdeeKcal: est.adaptiveTdee,
+        suggestedTarget: suggested,
+        adjustmentKcal: est.adjustmentKcal,
+        method: 'weight_trend_v1',
+        windowDays: days,
+        avgIntakeKcal: avgIntake,
+        weightSlopeKgWk: est.weightSlopeKgWk,
+        inputs: {
+          formula_tdee: formulaTdee,
+          food_days: daySet.size,
+          weight_delta_kg: weightDelta,
+        },
+      },
+    });
+    return {
+      adaptive_tdee_kcal: est.adaptiveTdee,
+      suggested_target: suggested,
+      adjustment_kcal: est.adjustmentKcal,
+      avg_intake_kcal: avgIntake,
+      weight_slope_kg_wk: est.weightSlopeKgWk,
+      window_days: days,
+    };
+  }
+
+  async getEnergySuggestion(appUserId: string) {
+    await this.recomputeAdaptiveEnergy(appUserId);
+    const row = await this.prisma.userEnergyState.findUnique({ where: { userId: appUserId } });
+    if (!row) {
+      return {
+        available: false,
+        message:
+          'Butuh ≥14 hari log berat dan ≥10 hari catat makanan untuk saran TDEE adaptif.',
+      };
+    }
+    return {
+      available: true,
+      adaptive_tdee_kcal: row.adaptiveTdeeKcal,
+      suggested_target: row.suggestedTarget,
+      adjustment_kcal: row.adjustmentKcal,
+      avg_intake_kcal: row.avgIntakeKcal,
+      weight_slope_kg_wk:
+        row.weightSlopeKgWk != null ? Number(row.weightSlopeKgWk) : null,
+      window_days: row.windowDays,
+      method: row.method,
+      message:
+        'Saran berdasarkan tren berat + rata-rata asupan. Bukan diagnosis. Terima untuk membuat target baru.',
+    };
+  }
+
+  async acceptEnergySuggestion(appUserId: string) {
+    const row = await this.prisma.userEnergyState.findUnique({ where: { userId: appUserId } });
+    if (!row?.suggestedTarget) {
+      throw new AppException(
+        'NO_SUGGESTION',
+        'Belum ada saran TDEE. Catat berat & makanan lebih dulu.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    const profile = await this.prisma.userProfile.findUnique({ where: { userId: appUserId } });
+    if (!profile?.fitnessGoal || !profile.currentWeightKg || !profile.heightCm || !profile.dateOfBirth) {
+      throw new AppException('PROFILE_INCOMPLETE', 'Lengkapi profil dulu.', HttpStatus.BAD_REQUEST);
+    }
+    const settings = await this.prisma.userSettings.findUnique({ where: { userId: appUserId } });
+    const tz = settings?.timezone ?? 'Asia/Jakarta';
+    const effectiveFrom = parseDateOnly(localDateString(new Date(), tz));
+    const ageYears = ageFromDob(profile.dateOfBirth);
+    // create snapshot with manual target = suggested
+    return this.createTargetSnapshot(appUserId, {
+      formula: 'manual',
+      weightKg: Number(profile.currentWeightKg),
+      heightCm: Number(profile.heightCm),
+      ageYears,
+      activityLevel: profile.activityLevel,
+      goal: profile.fitnessGoal,
+      targetRatePct: profile.targetRate != null ? Number(profile.targetRate) : null,
+      manualTarget: row.suggestedTarget,
+      effectiveFrom,
+    });
   }
 
   async listWeightLogs(appUserId: string, limit = 30) {
