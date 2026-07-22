@@ -13,6 +13,7 @@ import { MediaModule } from './modules/media/media.module';
 import { AiModule } from './modules/ai/ai.module';
 import { AccountModule } from './modules/account/account.module';
 import { FeaturesModule } from './modules/features/features.module';
+import { NutritionV2Module } from './modules/nutrition-v2/nutrition-v2.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { FeaturesModule } from './modules/features/features.module';
     UsersModule,
     OnboardingModule,
     NutritionModule,
+    NutritionV2Module,
     ActivitiesModule,
     DashboardModule,
     MediaModule,
@@ -32,4 +34,3 @@ import { FeaturesModule } from './modules/features/features.module';
   ],
 })
 export class AppModule {}
-

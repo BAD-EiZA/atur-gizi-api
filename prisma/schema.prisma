@@ -122,6 +122,10 @@ model AppUser {
   rateLimitBuckets RateLimitBucket[]
   analyticsEvents AnalyticsEvent[]
   mealMemories    MealMemory[]
+  nutritionGoals            NutritionGoal[]
+  nutritionSafetyScreening  NutritionSafetyScreening?
+  nutritionPreviews         NutritionPreview[]
+  nutritionAcceptances      NutritionGoalAcceptance[]
 
   @@map("app_users")
 }
@@ -435,10 +439,12 @@ model IdempotencyKey {
   key          String
   route        String
   requestHash  String   @map("request_hash")
+  status       String   @default("completed") // processing | completed | failed
   statusCode   Int      @map("status_code")
   responseBody Json     @map("response_body")
   expiresAt    DateTime @map("expires_at") @db.Timestamptz
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -639,4 +645,172 @@ model AnalyticsEvent {
   @@index([name, createdAt(sort: Desc)])
   @@index([userId, createdAt(sort: Desc)])
   @@map("analytics_events")
+}
+
+enum NutritionGoalType {
+  lose_weight
+  maintain
+  gain_weight
+  manual
+}
+
+enum NutritionGoalMethod {
+  weekly_rate
+  target_date
+  maintenance
+  manual
+}
+
+enum NutritionGoalStatus {
+  draft
+  active
+  eligible_for_completion
+  completed
+  cancelled
+  replaced
+}
+
+enum NutritionGoalSource {
+  automatic
+  manual_adult
+  manual_adolescent
+}
+
+enum NutritionValueSource {
+  estimated
+  manual
+}
+
+enum ScreeningAnswer {
+  yes
+  no
+  unknown
+  prefer_not_to_say
+}
+
+enum NutritionPreviewStatus {
+  unused
+  consumed
+  invalidated
+  expired
+}
+
+model NutritionSafetyScreening {
+  id                              String          @id @default(uuid()) @db.Uuid
+  userId                          String          @unique @map("user_id") @db.Uuid
+  version                         Int             @default(1)
+  isPregnant                      ScreeningAnswer @map("is_pregnant")
+  isBreastfeeding                 ScreeningAnswer @map("is_breastfeeding")
+  hasKidneyDisease                ScreeningAnswer @map("has_kidney_disease")
+  hasLiverDisease                 ScreeningAnswer @map("has_liver_disease")
+  hasHeartFailureOrFluidRetention ScreeningAnswer @map("has_heart_failure_or_fluid_retention")
+  usesHypoglycemiaRiskMedication  ScreeningAnswer @map("uses_hypoglycemia_risk_medication")
+  hasEatingDisorderHistory        ScreeningAnswer @map("has_eating_disorder_history")
+  consentVersion                  String          @map("consent_version")
+  createdAt                       DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt                       DateTime        @updatedAt @map("updated_at") @db.Timestamptz
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("nutrition_safety_screenings")
+}
+
+model NutritionPreview {
+  id                   String                  @id @default(uuid()) @db.Uuid
+  userId               String                  @map("user_id") @db.Uuid
+  status               NutritionPreviewStatus  @default(unused)
+  inputHash            String                  @map("input_hash")
+  screeningRecordId    String                  @map("screening_record_id") @db.Uuid
+  screeningVersion     Int                     @map("screening_version")
+  calculationLocalDate DateTime                @map("calculation_local_date") @db.Date
+  timezone             String
+  formulaVersions      Json                    @map("formula_versions")
+  rulesetVersions      Json                    @map("ruleset_versions")
+  warningCodes         Json                    @map("warning_codes")
+  blockingCodes        Json                    @map("blocking_codes")
+  safeInputSnapshot    Json                    @map("safe_input_snapshot")
+  outputSnapshot       Json                    @map("output_snapshot")
+  expiresAt            DateTime                @map("expires_at") @db.Timestamptz
+  consumedAt           DateTime?               @map("consumed_at") @db.Timestamptz
+  invalidatedAt        DateTime?               @map("invalidated_at") @db.Timestamptz
+  createdAt            DateTime                @default(now()) @map("created_at") @db.Timestamptz
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status, expiresAt])
+  @@map("nutrition_previews")
+}
+
+model NutritionGoal {
+  id                   String               @id @default(uuid()) @db.Uuid
+  userId               String               @map("user_id") @db.Uuid
+  rootGoalId           String               @map("root_goal_id") @db.Uuid
+  parentGoalId         String?              @map("parent_goal_id") @db.Uuid
+  replacesGoalId       String?              @map("replaces_goal_id") @db.Uuid
+  revisionNumber       Int                  @map("revision_number")
+  type                 NutritionGoalType
+  method               NutritionGoalMethod
+  status               NutritionGoalStatus
+  source               NutritionGoalSource  @default(automatic)
+  valueSource          NutritionValueSource @map("value_source")
+
+  startWeightKg        Decimal              @map("start_weight_kg") @db.Decimal(6, 3)
+  targetWeightKg       Decimal?             @map("target_weight_kg") @db.Decimal(6, 3)
+  weeklyChangeKg       Decimal?             @map("weekly_change_kg") @db.Decimal(6, 3)
+  targetDate           DateTime?            @map("target_date") @db.Date
+  estimatedWeeks       Decimal?             @map("estimated_weeks") @db.Decimal(7, 3)
+
+  bmi                  Decimal?             @db.Decimal(7, 4)
+  targetBmi            Decimal?             @map("target_bmi") @db.Decimal(7, 4)
+  reeKcalPerDay        Decimal?             @map("ree_kcal_per_day") @db.Decimal(8, 2)
+  tdeeKcalPerDay       Decimal?             @map("tdee_kcal_per_day") @db.Decimal(8, 2)
+  targetCaloriesPerDay Decimal?             @map("target_calories_per_day") @db.Decimal(8, 2)
+  activityLevel        ActivityLevel?       @map("activity_level")
+  activityMultiplier   Decimal?             @map("activity_multiplier") @db.Decimal(6, 4)
+  feasibility          String?
+
+  formulaVersions      Json                 @map("formula_versions")
+  rulesetVersions      Json                 @map("ruleset_versions")
+  warningCodes         Json                 @map("warning_codes")
+  blockingCodes        Json                 @map("blocking_codes")
+  automaticPlanAllowed Boolean              @map("automatic_plan_allowed")
+  screeningRecordId    String?              @map("screening_record_id") @db.Uuid
+  screeningVersion     Int?                 @map("screening_version")
+  profileHash          String?              @map("profile_hash")
+  safetyEvaluatedAt    DateTime?            @map("safety_evaluated_at") @db.Timestamptz
+  safeInputSnapshot    Json                 @map("safe_input_snapshot")
+  outputSnapshot       Json                 @map("output_snapshot")
+
+  activatedAt          DateTime?            @map("activated_at") @db.Timestamptz
+  completionEligibleAt DateTime?            @map("completion_eligible_at") @db.Timestamptz
+  completedAt          DateTime?            @map("completed_at") @db.Timestamptz
+  cancelledAt          DateTime?            @map("cancelled_at") @db.Timestamptz
+  replacedAt           DateTime?            @map("replaced_at") @db.Timestamptz
+  createdAt            DateTime             @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt            DateTime             @updatedAt @map("updated_at") @db.Timestamptz
+
+  user        AppUser                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  acceptances NutritionGoalAcceptance[]
+
+  @@unique([rootGoalId, revisionNumber])
+  @@index([userId, status])
+  @@index([rootGoalId, status])
+  @@map("nutrition_goals")
+}
+
+model NutritionGoalAcceptance {
+  id                      String   @id @default(uuid()) @db.Uuid
+  userId                  String   @map("user_id") @db.Uuid
+  goalId                  String   @map("goal_id") @db.Uuid
+  acceptedWarningCodes    Json     @map("accepted_warning_codes")
+  aggressiveRiskAccepted  Boolean  @default(false) @map("aggressive_risk_accepted")
+  confirmationTextVersion String   @map("confirmation_text_version")
+  rulesetVersions         Json     @map("ruleset_versions")
+  acceptedAt              DateTime @default(now()) @map("accepted_at") @db.Timestamptz
+
+  user AppUser       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  goal NutritionGoal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@index([goalId, acceptedAt(sort: Desc)])
+  @@map("nutrition_goal_acceptances")
 }

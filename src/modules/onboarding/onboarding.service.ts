@@ -1,24 +1,61 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
+import { MetabolicFormula } from '@prisma/client';
 import { UsersService } from '../users/users.service';
 import { CompleteOnboardingDto, PreviewTargetDto } from './dto/onboarding.dto';
-import { ageFromDob, localDateString, parseDateOnly } from '../../common/utils/date.util';
-import { computeMacroTargets, computeTarget } from '../../common/utils/nutrition.util';
+import {
+  ageFromDob,
+  localDateString,
+  parseDateOnly,
+} from '../../common/utils/date.util';
+import {
+  computeMacroTargets,
+  computeTarget,
+} from '../../common/utils/nutrition.util';
+import {
+  canUseAdultAutomaticPlan,
+  equationSexFromProfile,
+  normalizeMetabolicFormula,
+} from '../../common/utils/nutrition-v2.util';
 import { AppException } from '../../common/errors/app.exception';
 import { PrismaService } from '../../prisma/prisma.service';
+import { NutritionV2Service } from '../nutrition-v2/nutrition-v2.service';
 
 @Injectable()
 export class OnboardingService {
   constructor(
     private readonly users: UsersService,
     private readonly prisma: PrismaService,
+    private readonly nutritionV2: NutritionV2Service,
   ) {}
+
+  private resolveFormula(dto: PreviewTargetDto): MetabolicFormula {
+    let formula = dto.metabolicFormula;
+    if (dto.sex === 'male' && (!formula || formula === 'manual'))
+      formula = 'mifflin_a';
+    if (dto.sex === 'female' && (!formula || formula === 'manual'))
+      formula = 'mifflin_b';
+    return normalizeMetabolicFormula(formula, dto.sex);
+  }
 
   preview(dto: PreviewTargetDto) {
     this.users.assertMinAge(dto.dateOfBirth);
     const ageYears = ageFromDob(parseDateOnly(dto.dateOfBirth));
+    const formula = this.resolveFormula(dto);
+    const adultAutomaticAllowed = canUseAdultAutomaticPlan(ageYears);
+    if (
+      !adultAutomaticAllowed &&
+      formula !== 'manual' &&
+      dto.fitnessGoal !== 'manual'
+    ) {
+      throw new AppException(
+        'AGE_UNSUPPORTED',
+        'Kalkulasi target otomatis dewasa tersedia untuk usia 20–100 tahun. Gunakan target manual atau lanjutkan pencatatan.',
+        HttpStatus.UNPROCESSABLE_ENTITY,
+      );
+    }
     try {
       const result = computeTarget({
-        formula: dto.metabolicFormula,
+        formula,
         weightKg: dto.weightKg,
         heightCm: dto.heightCm,
         ageYears,
@@ -27,6 +64,13 @@ export class OnboardingService {
         targetRatePct: dto.targetRate,
         manualTarget: dto.manualTarget,
       });
+      const basics = this.nutritionV2.previewFromInputs({
+        weightKg: dto.weightKg,
+        heightCm: dto.heightCm,
+        ageYears,
+        equationSex: equationSexFromProfile(dto.sex, formula),
+        activityLevel: dto.activityLevel ?? null,
+      });
       return {
         age_years: ageYears,
         bmr_kcal: result.bmrKcal,
@@ -34,7 +78,14 @@ export class OnboardingService {
         calorie_target: result.calorieTarget,
         calculation_method: result.calculationMethod,
         formula_version: result.formulaVersion,
-        calculation_inputs: result.calculationInputs,
+        metabolic_formula: formula,
+        adult_automatic_allowed: adultAutomaticAllowed,
+        nutrition_basics: basics,
+        calculation_inputs: {
+          ...result.calculationInputs,
+          metabolic_formula_normalized: formula,
+          target_rate_unit: 'percent_tdee',
+        },
         disclaimer:
           'Estimasi kalori dan nutrisi dapat tidak akurat. Aplikasi ini bukan pengganti nasihat medis atau ahli gizi.',
       };
@@ -56,7 +107,8 @@ export class OnboardingService {
       );
     }
     this.users.assertMinAge(dto.dateOfBirth);
-    const preview = this.preview(dto);
+    const formula = this.resolveFormula(dto);
+    const preview = this.preview({ ...dto, metabolicFormula: formula });
     const dob = parseDateOnly(dto.dateOfBirth);
     const timezone = dto.timezone ?? 'Asia/Jakarta';
     const today = parseDateOnly(localDateString(new Date(), timezone));
@@ -68,11 +120,6 @@ export class OnboardingService {
           data: { displayName: dto.displayName },
         });
       }
-      let formula = dto.metabolicFormula;
-      if (dto.sex === 'male' && formula === 'mifflin_b') formula = 'mifflin_a';
-      if (dto.sex === 'female' && formula === 'mifflin_a') formula = 'mifflin_b';
-      if (dto.sex === 'male' && (!formula || formula === 'manual')) formula = 'mifflin_a';
-      if (dto.sex === 'female' && (!formula || formula === 'manual')) formula = 'mifflin_b';
       await tx.userProfile.update({
         where: { userId: appUserId },
         data: {
@@ -129,6 +176,8 @@ export class OnboardingService {
           calculationInputs: {
             ...(preview.calculation_inputs as object),
             macros_method: macros.method,
+            metabolic_formula_normalized: formula,
+            target_rate_unit: 'percent_tdee',
           },
         },
       });

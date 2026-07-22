@@ -3,7 +3,9 @@ export default () => ({
   appEnv: process.env.APP_ENV ?? 'development',
   port: parseInt(process.env.PORT ?? '4000', 10),
   apiBaseUrl: process.env.API_BASE_URL ?? 'http://localhost:4000',
-  frontendAllowedOrigins: (process.env.FRONTEND_ALLOWED_ORIGINS ?? 'http://localhost:3000')
+  frontendAllowedOrigins: (
+    process.env.FRONTEND_ALLOWED_ORIGINS ?? 'http://localhost:3000'
+  )
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean),
@@ -27,8 +29,17 @@ export default () => ({
     cloudName: process.env.CLOUDINARY_CLOUD_NAME ?? '',
     apiKey: process.env.CLOUDINARY_API_KEY ?? '',
     apiSecret: process.env.CLOUDINARY_API_SECRET ?? '',
-    uploadFolder: process.env.CLOUDINARY_UPLOAD_FOLDER ?? 'ai-fitness/development',
+    uploadFolder:
+      process.env.CLOUDINARY_UPLOAD_FOLDER ?? 'ai-fitness/development',
     deliveryType: process.env.CLOUDINARY_DELIVERY_TYPE ?? 'authenticated',
   },
   minUserAge: parseInt(process.env.MIN_USER_AGE ?? '15', 10),
+  adultAutomaticMinAge: parseInt(
+    process.env.ADULT_AUTOMATIC_MIN_AGE ?? '20',
+    10,
+  ),
+  adultAutomaticMaxAge: parseInt(
+    process.env.ADULT_AUTOMATIC_MAX_AGE ?? '100',
+    10,
+  ),
 });

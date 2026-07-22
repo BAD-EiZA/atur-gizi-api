@@ -11,9 +11,15 @@ export class AccountService {
   ) {}
 
   async requestDeletion(userId: string) {
-    const user = await this.prisma.appUser.findUnique({ where: { id: userId } });
+    const user = await this.prisma.appUser.findUnique({
+      where: { id: userId },
+    });
     if (!user) {
-      throw new AppException('USER_NOT_FOUND', 'Pengguna tidak ditemukan.', HttpStatus.NOT_FOUND);
+      throw new AppException(
+        'USER_NOT_FOUND',
+        'Pengguna tidak ditemukan.',
+        HttpStatus.NOT_FOUND,
+      );
     }
     if (user.status === 'deleted') {
       return { status: 'deleted' };
@@ -71,6 +77,10 @@ export class AccountService {
       this.prisma.rateLimitBucket.deleteMany({ where: { userId } }),
       this.prisma.analyticsEvent.deleteMany({ where: { userId } }),
       this.prisma.mealMemory.deleteMany({ where: { userId } }),
+      this.prisma.nutritionGoalAcceptance.deleteMany({ where: { userId } }),
+      this.prisma.nutritionGoal.deleteMany({ where: { userId } }),
+      this.prisma.nutritionPreview.deleteMany({ where: { userId } }),
+      this.prisma.nutritionSafetyScreening.deleteMany({ where: { userId } }),
       this.prisma.userProfile.deleteMany({ where: { userId } }),
       this.prisma.userSettings.deleteMany({ where: { userId } }),
       this.prisma.appUser.update({
@@ -89,7 +99,9 @@ export class AccountService {
   }
 
   async status(userId: string) {
-    const user = await this.prisma.appUser.findUnique({ where: { id: userId } });
+    const user = await this.prisma.appUser.findUnique({
+      where: { id: userId },
+    });
     if (!user) {
       return { status: 'not_found' };
     }

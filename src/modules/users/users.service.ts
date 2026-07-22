@@ -14,15 +14,27 @@ import {
   computeTarget,
   estimateAdaptiveTdee,
 } from '../../common/utils/nutrition.util';
-import { ageFromDob, localDateString, parseDateOnly } from '../../common/utils/date.util';
+import {
+  canUseAdultAutomaticPlan,
+  normalizeMetabolicFormula,
+} from '../../common/utils/nutrition-v2.util';
+import {
+  ageFromDob,
+  localDateString,
+  parseDateOnly,
+} from '../../common/utils/date.util';
 import { ConfigService } from '@nestjs/config';
 import { BiologicalSex, FitnessGoal, MetabolicFormula } from '@prisma/client';
+import { NutritionV2Service } from '../nutrition-v2/nutrition-v2.service';
+import { NutritionV2GoalsService } from '../nutrition-v2/nutrition-v2-goals.service';
 
 @Injectable()
 export class UsersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly nutritionV2: NutritionV2Service,
+    private readonly nutritionV2Goals: NutritionV2GoalsService,
   ) {}
 
   async sync(claims: AuthClaims) {
@@ -48,21 +60,41 @@ export class UsersService {
       include: { profile: true, settings: true },
     });
 
-    return this.toMe(user);
+    return this.me(user.id);
   }
 
   async me(appUserId: string) {
     if (!appUserId) {
-      throw new AppException('USER_NOT_SYNCED', 'Panggil /v1/users/sync terlebih dahulu.', HttpStatus.NOT_FOUND);
+      throw new AppException(
+        'USER_NOT_SYNCED',
+        'Panggil /v1/users/sync terlebih dahulu.',
+        HttpStatus.NOT_FOUND,
+      );
     }
     const user = await this.prisma.appUser.findUnique({
       where: { id: appUserId },
       include: { profile: true, settings: true },
     });
     if (!user) {
-      throw new AppException('USER_NOT_FOUND', 'Pengguna tidak ditemukan.', HttpStatus.NOT_FOUND);
+      throw new AppException(
+        'USER_NOT_FOUND',
+        'Pengguna tidak ditemukan.',
+        HttpStatus.NOT_FOUND,
+      );
     }
-    return this.toMe(user);
+    const base = this.toMe(user);
+    const ageYears = user.profile?.dateOfBirth
+      ? ageFromDob(user.profile.dateOfBirth)
+      : null;
+    const nutritionBasics = user.profile?.onboardingCompleted
+      ? await this.nutritionV2.basicsFromProfile(appUserId)
+      : null;
+    return {
+      ...base,
+      adult_automatic_allowed:
+        ageYears != null ? canUseAdultAutomaticPlan(ageYears) : false,
+      nutrition_basics: nutritionBasics,
+    };
   }
 
   async patchProfile(appUserId: string, dto: PatchProfileDto) {
@@ -71,7 +103,11 @@ export class UsersService {
       include: { profile: true },
     });
     if (!user?.profile) {
-      throw new AppException('USER_NOT_FOUND', 'Pengguna tidak ditemukan.', HttpStatus.NOT_FOUND);
+      throw new AppException(
+        'USER_NOT_FOUND',
+        'Pengguna tidak ditemukan.',
+        HttpStatus.NOT_FOUND,
+      );
     }
 
     if (dto.dateOfBirth) {
@@ -88,9 +124,24 @@ export class UsersService {
       dto.dateOfBirth != null ||
       dto.sex != null;
 
-    let formula = dto.metabolicFormula;
-    if (dto.sex === BiologicalSex.male && !formula) formula = MetabolicFormula.mifflin_a;
-    if (dto.sex === BiologicalSex.female && !formula) formula = MetabolicFormula.mifflin_b;
+    const currentFormula = user.profile.metabolicFormula;
+    const nextSex = dto.sex ?? user.profile.sex;
+    let formula = dto.metabolicFormula ?? currentFormula;
+    if (
+      nextSex === BiologicalSex.male &&
+      (!formula || formula === MetabolicFormula.manual) &&
+      dto.sex
+    ) {
+      formula = MetabolicFormula.mifflin_a;
+    }
+    if (
+      nextSex === BiologicalSex.female &&
+      (!formula || formula === MetabolicFormula.manual) &&
+      dto.sex
+    ) {
+      formula = MetabolicFormula.mifflin_b;
+    }
+    formula = normalizeMetabolicFormula(formula, nextSex);
 
     await this.prisma.$transaction(async (tx) => {
       if (dto.displayName !== undefined) {
@@ -102,7 +153,9 @@ export class UsersService {
       await tx.userProfile.update({
         where: { userId: appUserId },
         data: {
-          dateOfBirth: dto.dateOfBirth ? parseDateOnly(dto.dateOfBirth) : undefined,
+          dateOfBirth: dto.dateOfBirth
+            ? parseDateOnly(dto.dateOfBirth)
+            : undefined,
           heightCm: dto.heightCm,
           currentWeightKg: dto.currentWeightKg,
           sex: dto.sex,
@@ -126,6 +179,9 @@ export class UsersService {
 
     if (affectsTarget) {
       await this.refreshTargetFromProfile(appUserId);
+    }
+    if (dto.currentWeightKg != null) {
+      await this.tryReevaluateRunningGoal(appUserId);
     }
 
     return this.me(appUserId);
@@ -152,15 +208,24 @@ export class UsersService {
       include: { profile: true, settings: true },
     });
     const p = user?.profile;
-    if (!p?.currentWeightKg || !p.heightCm || !p.dateOfBirth || !p.fitnessGoal) return null;
+    if (!p?.currentWeightKg || !p.heightCm || !p.dateOfBirth || !p.fitnessGoal)
+      return null;
     const ageYears = ageFromDob(p.dateOfBirth);
+    const formula = normalizeMetabolicFormula(p.metabolicFormula, p.sex);
+    if (
+      !canUseAdultAutomaticPlan(ageYears) &&
+      formula !== 'manual' &&
+      p.fitnessGoal !== 'manual'
+    ) {
+      return null;
+    }
     const weightKg = Number(p.currentWeightKg);
     const heightCm = Number(p.heightCm);
     const settings = user?.settings;
     const tz = settings?.timezone ?? 'Asia/Jakarta';
     const effectiveFrom = parseDateOnly(localDateString(new Date(), tz));
     return this.createTargetSnapshot(appUserId, {
-      formula: p.metabolicFormula,
+      formula,
       weightKg,
       heightCm,
       ageYears,
@@ -193,12 +258,25 @@ export class UsersService {
     } catch {
       /* ignore */
     }
+    const completion = await this.tryReevaluateRunningGoal(appUserId);
     return {
       id: row.id,
       weight_kg: Number(row.weightKg),
       logged_at: row.loggedAt.toISOString(),
       note: row.note,
+      nutrition_goal_completion: completion,
     };
+  }
+
+  /** Best-effort: update running v2 goal eligibility after weight changes. */
+  private async tryReevaluateRunningGoal(appUserId: string) {
+    try {
+      const result =
+        await this.nutritionV2Goals.reevaluateCompletion(appUserId);
+      return result.goal;
+    } catch {
+      return null;
+    }
   }
 
   async recomputeAdaptiveEnergy(appUserId: string) {
@@ -208,11 +286,13 @@ export class UsersService {
       take: 60,
     });
     if (weights.length < 4) return null;
-    const first = weights[0]!;
-    const last = weights[weights.length - 1]!;
+    const first = weights[0];
+    const last = weights[weights.length - 1];
     const days = Math.max(
       7,
-      Math.round((last.loggedAt.getTime() - first.loggedAt.getTime()) / (86400000)),
+      Math.round(
+        (last.loggedAt.getTime() - first.loggedAt.getTime()) / 86400000,
+      ),
     );
     if (days < 14) return null;
 
@@ -224,7 +304,9 @@ export class UsersService {
         logDate: { gte: parseDateOnly(from.toISOString().slice(0, 10)) },
       },
     });
-    const daySet = new Set(foods.map((f) => f.logDate.toISOString().slice(0, 10)));
+    const daySet = new Set(
+      foods.map((f) => f.logDate.toISOString().slice(0, 10)),
+    );
     if (daySet.size < 10) return null;
 
     const totalIntake = foods.reduce((s, f) => s + f.totalCalories, 0);
@@ -292,7 +374,9 @@ export class UsersService {
 
   async getEnergySuggestion(appUserId: string) {
     await this.recomputeAdaptiveEnergy(appUserId);
-    const row = await this.prisma.userEnergyState.findUnique({ where: { userId: appUserId } });
+    const row = await this.prisma.userEnergyState.findUnique({
+      where: { userId: appUserId },
+    });
     if (!row) {
       return {
         available: false,
@@ -316,7 +400,9 @@ export class UsersService {
   }
 
   async acceptEnergySuggestion(appUserId: string) {
-    const row = await this.prisma.userEnergyState.findUnique({ where: { userId: appUserId } });
+    const row = await this.prisma.userEnergyState.findUnique({
+      where: { userId: appUserId },
+    });
     if (!row?.suggestedTarget) {
       throw new AppException(
         'NO_SUGGESTION',
@@ -324,11 +410,24 @@ export class UsersService {
         HttpStatus.BAD_REQUEST,
       );
     }
-    const profile = await this.prisma.userProfile.findUnique({ where: { userId: appUserId } });
-    if (!profile?.fitnessGoal || !profile.currentWeightKg || !profile.heightCm || !profile.dateOfBirth) {
-      throw new AppException('PROFILE_INCOMPLETE', 'Lengkapi profil dulu.', HttpStatus.BAD_REQUEST);
+    const profile = await this.prisma.userProfile.findUnique({
+      where: { userId: appUserId },
+    });
+    if (
+      !profile?.fitnessGoal ||
+      !profile.currentWeightKg ||
+      !profile.heightCm ||
+      !profile.dateOfBirth
+    ) {
+      throw new AppException(
+        'PROFILE_INCOMPLETE',
+        'Lengkapi profil dulu.',
+        HttpStatus.BAD_REQUEST,
+      );
     }
-    const settings = await this.prisma.userSettings.findUnique({ where: { userId: appUserId } });
+    const settings = await this.prisma.userSettings.findUnique({
+      where: { userId: appUserId },
+    });
     const tz = settings?.timezone ?? 'Asia/Jakarta';
     const effectiveFrom = parseDateOnly(localDateString(new Date(), tz));
     const ageYears = ageFromDob(profile.dateOfBirth);
@@ -340,7 +439,8 @@ export class UsersService {
       ageYears,
       activityLevel: profile.activityLevel,
       goal: profile.fitnessGoal,
-      targetRatePct: profile.targetRate != null ? Number(profile.targetRate) : null,
+      targetRatePct:
+        profile.targetRate != null ? Number(profile.targetRate) : null,
       manualTarget: row.suggestedTarget,
       effectiveFrom,
     });
@@ -385,8 +485,10 @@ export class UsersService {
     });
     return {
       calorie_target: updated.calorieTarget,
-      protein_g: updated.proteinTargetG != null ? Number(updated.proteinTargetG) : null,
-      carbs_g: updated.carbsTargetG != null ? Number(updated.carbsTargetG) : null,
+      protein_g:
+        updated.proteinTargetG != null ? Number(updated.proteinTargetG) : null,
+      carbs_g:
+        updated.carbsTargetG != null ? Number(updated.carbsTargetG) : null,
       fat_g: updated.fatTargetG != null ? Number(updated.fatTargetG) : null,
     };
   }
@@ -451,7 +553,9 @@ export class UsersService {
         calculationInputs: {
           ...computed.calculationInputs,
           macros_method: macros.method,
-        } as object,
+          target_rate_unit: 'percent_tdee',
+          metabolic_formula_normalized: input.formula,
+        },
       },
     });
   }
@@ -483,7 +587,9 @@ export class UsersService {
       calorieBudgetMode?: string;
     } | null;
   }) {
-    const num = (v: { toNumber?: () => number } | number | null | undefined) => {
+    const num = (
+      v: { toNumber?: () => number } | number | null | undefined,
+    ) => {
       if (v == null) return null;
       if (typeof v === 'number') return v;
       return v.toNumber ? v.toNumber() : Number(v);
@@ -517,7 +623,8 @@ export class UsersService {
             locale: user.settings.locale,
             retain_food_photos: user.settings.retainFoodPhotos,
             analytics_consent: user.settings.analyticsConsent,
-            calorie_budget_mode: user.settings.calorieBudgetMode ?? 'intake_only',
+            calorie_budget_mode:
+              user.settings.calorieBudgetMode ?? 'intake_only',
           }
         : null,
     };
