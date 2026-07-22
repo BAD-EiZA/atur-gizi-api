@@ -1,4 +1,5 @@
 import type { Prisma } from '@prisma/client';
+import { computeMacroTargets } from './nutrition.util';
 
 type Tx = Prisma.TransactionClient;
 
@@ -54,11 +55,18 @@ export async function createDailyTargetFromNutritionGoal(
     reeKcalPerDay: number | null;
     tdeeKcalPerDay: number | null;
     targetCaloriesPerDay: number;
+    weightKg: number;
     formulaVersions: unknown;
     rulesetVersions: unknown;
   },
 ) {
   await closeOpenDailyTargets(tx, input.userId, input.effectiveFrom);
+  const calorieTarget = Math.round(Number(input.targetCaloriesPerDay));
+  const macros = computeMacroTargets({
+    calorieTarget,
+    weightKg: input.weightKg,
+    goal: input.fitnessGoal,
+  });
   return tx.dailyTarget.create({
     data: {
       userId: input.userId,
@@ -71,13 +79,18 @@ export async function createDailyTargetFromNutritionGoal(
         input.tdeeKcalPerDay != null
           ? Math.round(Number(input.tdeeKcalPerDay))
           : null,
-      calorieTarget: Math.round(Number(input.targetCaloriesPerDay)),
+      calorieTarget,
+      proteinTargetG: macros.proteinG,
+      carbsTargetG: macros.carbsG,
+      fatTargetG: macros.fatG,
       goal: input.fitnessGoal,
       calculationMethod: 'nutrition_v2_goal',
       calculationInputs: {
         nutrition_goal_id: input.goalId,
         formula_versions: input.formulaVersions,
         ruleset_versions: input.rulesetVersions,
+        macros_method: macros.method,
+        weight_kg: input.weightKg,
       } as Prisma.InputJsonValue,
     },
   });

@@ -590,6 +590,10 @@ export class NutritionV2GoalsService {
       if (activated.targetCaloriesPerDay != null) {
         const fitnessGoal =
           profile?.fitnessGoal ?? this.mapFitnessGoalFromType(activated.type);
+        const weightKg =
+          profile?.currentWeightKg != null
+            ? Number(profile.currentWeightKg)
+            : Number(activated.startWeightKg);
         await createDailyTargetFromNutritionGoal(tx, {
           userId,
           effectiveFrom: today,
@@ -604,6 +608,7 @@ export class NutritionV2GoalsService {
               ? Number(activated.tdeeKcalPerDay)
               : null,
           targetCaloriesPerDay: Number(activated.targetCaloriesPerDay),
+          weightKg,
           formulaVersions: activated.formulaVersions,
           rulesetVersions: activated.rulesetVersions,
         });
